@@ -164,7 +164,7 @@ where
         let decided_idx = self.internal_storage.get_decided_idx();
         let accepted_idx = self.internal_storage.get_accepted_idx();
         let promise = self.internal_storage.get_promise();
-        for slot_idx in decided_idx + 1..accepted_idx + 1 {
+        for slot_idx in decided_idx..accepted_idx {
             let metronome_slot_idx = slot_idx % self.metronome2.total_len;
             let in_my_critical_order = self
                 .metronome2
