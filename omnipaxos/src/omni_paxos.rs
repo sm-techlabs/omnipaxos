@@ -404,9 +404,14 @@ where
         self.seq_paxos.append(entry)
     }
 
-    /// become leader with the given ballot. Only used for metronome, assumes no leader election.
+    /// Become leader with the given ballot. Only used for metronome, assumes no leader election.
     pub fn initialize_prepare_phase(&mut self, n: Ballot) {
         self.seq_paxos.handle_leader(n);
+    }
+
+    /// Accept non-decided slots not in this node's Metronome ordering. Must use RoundRobin2.
+    pub fn steal_pending_accepts(&mut self) {
+        self.seq_paxos.steal_pending_accepts();
     }
 
     /// Propose a cluster reconfiguration. Returns an error if the current configuration has already been stopped

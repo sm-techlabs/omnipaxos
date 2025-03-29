@@ -126,7 +126,7 @@ where
                 }
             }
             MetronomeSetting::RoundRobin2 => {
-                let metronome_slot_idx = slot_idx % self.metronome.total_len;
+                let metronome_slot_idx = slot_idx % self.metronome2.total_len;
                 if self
                     .metronome2
                     .my_critical_ordering
@@ -152,6 +152,26 @@ where
             }
             _ => {
                 self.send_acceptdecide(slot_idx, entry);
+            }
+        }
+    }
+
+    pub(crate) fn steal_pending_accepts_leader(&mut self) {
+        match self.metronome_setting {
+            MetronomeSetting::RoundRobin2 => (),
+            _ => unimplemented!("Worksteal only supported when Metronome2 is activated"),
+        }
+        let decided_idx = self.internal_storage.get_decided_idx();
+        let accepted_idx = self.internal_storage.get_accepted_idx();
+        let promise = self.internal_storage.get_promise();
+        for slot_idx in decided_idx + 1..accepted_idx + 1 {
+            let metronome_slot_idx = slot_idx % self.metronome2.total_len;
+            let in_my_critical_order = self
+                .metronome2
+                .my_critical_ordering
+                .contains(&metronome_slot_idx);
+            if !in_my_critical_order {
+                self.leader_state.increment_accepted_slot(slot_idx);
             }
         }
     }

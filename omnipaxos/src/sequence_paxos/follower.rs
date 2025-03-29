@@ -148,6 +148,26 @@ where
         }
     }
 
+    pub(crate) fn steal_pending_accepts_follower(&mut self) {
+        match self.metronome_setting {
+            MetronomeSetting::RoundRobin2 => (),
+            _ => unimplemented!("Worksteal only supported when Metronome2 is activated"),
+        }
+        let decided_idx = self.internal_storage.get_decided_idx();
+        let accepted_idx = self.internal_storage.get_accepted_idx();
+        let promise = self.internal_storage.get_promise();
+        for slot_idx in decided_idx + 1..accepted_idx + 1 {
+            let metronome_slot_idx = slot_idx % self.metronome2.total_len;
+            let in_my_critical_order = self
+                .metronome2
+                .my_critical_ordering
+                .contains(&metronome_slot_idx);
+            if !in_my_critical_order {
+                self.reply_accepted(promise, slot_idx);
+            }
+        }
+    }
+
     pub(crate) fn handle_accept_stopsign(&mut self, acc_ss: AcceptStopSign) {
         if self.check_valid_ballot(acc_ss.n)
             && self.state == (Role::Follower, Phase::Accept)

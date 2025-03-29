@@ -407,6 +407,14 @@ where
         }
     }
 
+    pub(crate) fn steal_pending_accepts(&mut self) {
+        match self.state {
+            (Role::Leader, Phase::Accept) => self.steal_pending_accepts_leader(),
+            (Role::Follower, Phase::Accept) => self.steal_pending_accepts_follower(),
+            _ => (),
+        }
+    }
+
     pub(crate) fn get_leader_state(&self) -> &LeaderState<T> {
         &self.leader_state
     }
