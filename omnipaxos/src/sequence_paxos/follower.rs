@@ -156,6 +156,7 @@ where
         let decided_idx = self.internal_storage.get_decided_idx();
         let accepted_idx = self.internal_storage.get_accepted_idx();
         let promise = self.internal_storage.get_promise();
+        let mut steals = 0;
         for slot_idx in decided_idx..accepted_idx {
             let metronome_slot_idx = slot_idx % self.metronome2.total_len;
             let in_my_critical_order = self
@@ -164,8 +165,10 @@ where
                 .contains(&metronome_slot_idx);
             if !in_my_critical_order {
                 self.reply_accepted(promise, slot_idx);
+                steals += 1;
             }
         }
+        eprintln!("{}: stole {steals} Accepts", self.pid);
     }
 
     pub(crate) fn handle_accept_stopsign(&mut self, acc_ss: AcceptStopSign) {
