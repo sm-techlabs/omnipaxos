@@ -7,7 +7,13 @@ use super::{
 };
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::{cmp::Ordering, collections::HashMap, fmt::Debug, marker::PhantomData, usize};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    fmt::Debug,
+    marker::PhantomData,
+    usize,
+};
 
 /// Struct used to help another server synchronize their log with the current state of our own log.
 #[derive(Clone, Debug)]
@@ -648,4 +654,32 @@ pub(crate) struct AcceptedMetaData<T: Entry> {
     pub entries: Vec<T>,
     #[cfg(feature = "unicache")]
     pub entries: Vec<T::EncodeResult>,
+}
+
+pub(crate) struct FollowerDecidedSlots {
+    pub undecided_frontier: usize,
+    pub decided_slots: HashSet<usize>,
+}
+
+impl FollowerDecidedSlots {
+    pub(crate) fn new() -> Self {
+        FollowerDecidedSlots {
+            undecided_frontier: 0,
+            decided_slots: HashSet::new(),
+        }
+    }
+
+    pub(crate) fn handle_decided_slots(&mut self, decided_slots: Vec<usize>) {
+        for slot_idx in decided_slots {
+            if slot_idx == self.undecided_frontier {
+                self.undecided_frontier += 1;
+                while self.decided_slots.remove(&self.undecided_frontier) {
+                    self.undecided_frontier += 1;
+                }
+            } else {
+                let _ = self.decided_slots.insert(slot_idx);
+            }
+            if self.decided_slots.contains(&slot_idx) {}
+        }
+    }
 }

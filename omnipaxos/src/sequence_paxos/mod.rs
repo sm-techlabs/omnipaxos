@@ -9,8 +9,8 @@ use crate::{
         Entry, Snapshot, StopSign, Storage,
     },
     util::{
-        defaults, FlexibleQuorum, LogSync, NodeId, Quorum, SequenceNumber, READ_ERROR_MSG,
-        WRITE_ERROR_MSG,
+        defaults, FlexibleQuorum, FollowerDecidedSlots, LogSync, NodeId, Quorum, SequenceNumber,
+        READ_ERROR_MSG, WRITE_ERROR_MSG,
     },
     BatchSetting, ClusterConfig, CompactionErr, MetronomeSetting, OmniPaxosConfig, ProposeErr,
 };
@@ -47,7 +47,9 @@ where
     metronome_setting: MetronomeSetting,
     batch_setting: BatchSetting,
     accepted_slots_cache: Vec<usize>,
-    decided_slots_since_last_call: Vec<usize>, // TODO fix this for followers, currently only leader keeps track of this.
+    decided_slots_since_last_call: Vec<usize>, // TODO: fix this for followers, currently only leader keeps track of this.
+    acceptor_decided_slots_cache: Vec<Vec<usize>>,
+    follower_decided_slots: FollowerDecidedSlots,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -125,6 +127,8 @@ where
             metronome,
             metronome2,
             decided_slots_since_last_call: Vec::with_capacity(1000),
+            acceptor_decided_slots_cache: vec![Vec::new(); num_nodes + 1],
+            follower_decided_slots: FollowerDecidedSlots::new(),
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {

@@ -94,7 +94,7 @@ pub mod sequence_paxos {
         /// The sequence number of this message in the leader-to-follower accept sequence
         pub seq_num: SequenceNumber,
         /// The decided index.
-        pub decided_idx: usize,
+        pub decided_slots: Vec<usize>,
         /// log index to append at.
         pub start_idx: usize,
         #[cfg(not(feature = "unicache"))]
