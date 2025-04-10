@@ -145,6 +145,16 @@ where
             .internal_storage
             .set_promise(leader)
             .expect(WRITE_ERROR_MSG);
+        eprintln!(
+            "Paxos component pid: {pid} created! metronome config: {:?}, batch setting: {:?}, my ordering: {:?}, total_len: {:?}, critical_len: {:?}",
+            paxos.metronome_setting,
+            paxos.batch_setting,
+            paxos.metronome2.my_critical_ordering,
+            paxos.metronome2.total_len,
+            paxos.metronome2.critical_len,
+        );
+        eprintln!("all_orderings: {:?}", paxos.metronome2.all_orderings);
+        eprintln!("ws_orderings: {:?}", paxos.metronome2.worksteal_orderings);
         #[cfg(feature = "logging")]
         {
             info!(
@@ -411,10 +421,12 @@ where
         }
     }
 
-    pub(crate) fn steal_pending_accepts(&mut self) {
+    pub(crate) fn steal_pending_accepts(&mut self, compromised_node: NodeId) {
         match self.state {
-            (Role::Leader, Phase::Accept) => self.steal_pending_accepts_leader(),
-            (Role::Follower, Phase::Accept) => self.steal_pending_accepts_follower(),
+            (Role::Leader, Phase::Accept) => self.steal_pending_accepts_leader(compromised_node),
+            (Role::Follower, Phase::Accept) => {
+                self.steal_pending_accepts_follower(compromised_node)
+            }
             _ => (),
         }
     }

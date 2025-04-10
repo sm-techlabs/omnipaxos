@@ -410,8 +410,8 @@ where
     }
 
     /// Accept non-decided slots not in this node's Metronome ordering. Must use RoundRobin2.
-    pub fn steal_pending_accepts(&mut self) {
-        self.seq_paxos.steal_pending_accepts();
+    pub fn steal_pending_accepts(&mut self, compromised_node: NodeId) {
+        self.seq_paxos.steal_pending_accepts(compromised_node);
     }
 
     /// Propose a cluster reconfiguration. Returns an error if the current configuration has already been stopped

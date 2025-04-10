@@ -119,22 +119,12 @@ where
                 match self.metronome_setting {
                     MetronomeSetting::Off => self.reply_accepted(acc_dec.n, slot_idx),
                     MetronomeSetting::RoundRobin => {
-                        let metronome_slot_idx = slot_idx % self.metronome.total_len;
-                        let in_my_critical_order = self
-                            .metronome
-                            .my_critical_ordering
-                            .contains(&metronome_slot_idx);
-                        if in_my_critical_order {
+                        if self.metronome.in_critical_order(slot_idx) {
                             self.reply_accepted(acc_dec.n, slot_idx);
                         }
                     }
                     MetronomeSetting::RoundRobin2 => {
-                        let metronome_slot_idx = slot_idx % self.metronome2.total_len;
-                        let in_my_critical_order = self
-                            .metronome2
-                            .my_critical_ordering
-                            .contains(&metronome_slot_idx);
-                        if in_my_critical_order {
+                        if self.metronome2.in_critical_order(slot_idx) {
                             self.reply_accepted(acc_dec.n, slot_idx);
                         }
                     }
@@ -150,7 +140,7 @@ where
         }
     }
 
-    pub(crate) fn steal_pending_accepts_follower(&mut self) {
+    pub(crate) fn steal_pending_accepts_follower(&mut self, compromised_node: NodeId) {
         match self.metronome_setting {
             MetronomeSetting::RoundRobin2 => (),
             _ => unimplemented!("Worksteal only supported when Metronome2 is activated"),
@@ -163,12 +153,10 @@ where
             .collect();
         let mut steals = 0;
         for slot_idx in pending_accepts {
-            let metronome_slot_idx = slot_idx % self.metronome2.total_len;
-            let in_my_critical_order = self
+            if self
                 .metronome2
-                .my_critical_ordering
-                .contains(&metronome_slot_idx);
-            if !in_my_critical_order {
+                .in_worksteal_order(slot_idx, compromised_node)
+            {
                 self.reply_accepted(promise, slot_idx);
                 steals += 1;
             }

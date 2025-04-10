@@ -128,6 +128,11 @@ impl Metronome {
             total_len: ordered_quorums.len(),
         }
     }
+
+    pub fn in_critical_order(&self, slot_idx: usize) -> bool {
+        let metronome_slot_idx = slot_idx % self.total_len;
+        self.my_critical_ordering.contains(&metronome_slot_idx)
+    }
 }
 
 #[cfg(test)]

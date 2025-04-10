@@ -116,22 +116,12 @@ where
             - 1;
         match self.metronome_setting {
             MetronomeSetting::RoundRobin => {
-                let metronome_slot_idx = slot_idx % self.metronome.total_len;
-                if self
-                    .metronome
-                    .my_critical_ordering
-                    .contains(&metronome_slot_idx)
-                {
+                if self.metronome.in_critical_order(slot_idx) {
                     self.leader_state.increment_accepted_slot(slot_idx);
                 }
             }
             MetronomeSetting::RoundRobin2 => {
-                let metronome_slot_idx = slot_idx % self.metronome2.total_len;
-                if self
-                    .metronome2
-                    .my_critical_ordering
-                    .contains(&metronome_slot_idx)
-                {
+                if self.metronome2.in_critical_order(slot_idx) {
                     self.leader_state.increment_accepted_slot(slot_idx);
                 }
             }
@@ -156,8 +146,7 @@ where
         }
     }
 
-    pub(crate) fn steal_pending_accepts_leader(&mut self) {
-        return;
+    pub(crate) fn steal_pending_accepts_leader(&mut self, compromised_node: NodeId) {
         match self.metronome_setting {
             MetronomeSetting::RoundRobin2 => (),
             _ => unimplemented!("Worksteal only supported when Metronome2 is activated"),
@@ -170,12 +159,10 @@ where
             .cloned()
             .collect();
         for slot_idx in pending_accepts {
-            let metronome_slot_idx = slot_idx % self.metronome2.total_len;
-            let in_my_critical_order = self
+            if self
                 .metronome2
-                .my_critical_ordering
-                .contains(&metronome_slot_idx);
-            if !in_my_critical_order {
+                .in_worksteal_order(slot_idx, compromised_node)
+            {
                 self.leader_state.increment_accepted_slot(slot_idx);
                 steals += 1;
             }

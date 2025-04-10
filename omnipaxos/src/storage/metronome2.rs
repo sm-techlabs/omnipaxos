@@ -7,6 +7,7 @@ pub struct Metronome {
     pub pid: NodeId,
     pub my_critical_ordering: Vec<usize>,
     pub all_orderings: Vec<Vec<usize>>,
+    pub worksteal_orderings: Vec<Vec<NodeId>>,
     pub critical_len: usize,
     pub total_len: usize,
 }
@@ -85,20 +86,79 @@ impl Metronome {
         (ordering, critical_len)
     }
 
-    fn get_all_orderings(ordered_quorums: &Vec<QuorumTuple>) -> Vec<Vec<usize>> {
-        todo!()
+    fn get_all_orderings(ordered_quorums: &Vec<QuorumTuple>, num_nodes: usize) -> Vec<Vec<usize>> {
+        let mut all_orderings = vec![vec![]];
+        for id in (1..num_nodes + 1) {
+            let (node_ordering, _) =
+                Self::get_my_ordering_and_critical_len(id as NodeId, &ordered_quorums);
+            all_orderings.push(node_ordering);
+        }
+        return all_orderings;
+    }
+
+    fn get_worksteal_orderings(
+        num_nodes: usize,
+        all_orderings: &Vec<Vec<usize>>,
+        total_len: usize,
+    ) -> Vec<Vec<NodeId>> {
+        let mut worksteal_orderings = vec![];
+        for slot_idx in (0..total_len) {
+            let mut stealers = vec![];
+            for pid in (1..num_nodes + 1) {
+                if !all_orderings[pid].contains(&slot_idx) {
+                    stealers.push(pid as NodeId);
+                }
+            }
+            worksteal_orderings.push(stealers);
+        }
+        worksteal_orderings
     }
 
     pub fn with(pid: NodeId, num_nodes: usize, quorum_size: usize) -> Self {
         let ordered_quorums = Self::create_ordered_quorums(num_nodes, quorum_size);
+        let total_len = ordered_quorums.len();
         let (ordering, critical_len) =
             Self::get_my_ordering_and_critical_len(pid, &ordered_quorums);
+        let all_orderings = Self::get_all_orderings(&ordered_quorums, num_nodes);
+        let worksteal_orderings =
+            Self::get_worksteal_orderings(num_nodes, &all_orderings, total_len);
         Metronome {
             pid,
             my_critical_ordering: ordering,
-            all_orderings: vec![],
+            all_orderings,
+            worksteal_orderings,
             critical_len,
-            total_len: ordered_quorums.len(),
+            total_len,
+        }
+    }
+
+    pub fn in_critical_order(&self, slot_idx: usize) -> bool {
+        let metronome_slot_idx = slot_idx % self.total_len;
+        self.my_critical_ordering.contains(&metronome_slot_idx)
+    }
+
+    pub fn in_worksteal_order(&self, slot_idx: usize, compromised_node: NodeId) -> bool {
+        let metronome_slot_idx = slot_idx % self.total_len;
+        let workstealers = &self.worksteal_orderings[metronome_slot_idx];
+        let my_worksteal_idx = workstealers
+            .iter()
+            .filter(|stealer| **stealer != compromised_node)
+            .position(|stealer| *stealer == self.pid);
+        // eprintln!("worksteal_idx: {my_worksteal_idx:?}");
+        // Part of workstealers => not in my critical order
+        match my_worksteal_idx {
+            None => false,
+            Some(idx) => {
+                let metronome_batch = slot_idx / self.total_len;
+                let num_workstealers = if workstealers.contains(&compromised_node) {
+                    workstealers.len() - 1
+                } else {
+                    workstealers.len()
+                };
+                // eprintln!("batch: {metronome_batch}");
+                // eprintln!("num_workstealers: {num_workstealers}");
+                metronome_batch % num_workstealers == idx
+            }
         }
     }
 }
