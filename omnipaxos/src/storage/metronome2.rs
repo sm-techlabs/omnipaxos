@@ -104,7 +104,8 @@ impl Metronome {
         let mut worksteal_orderings = vec![];
         for slot_idx in (0..total_len) {
             let mut stealers = vec![];
-            for pid in (1..num_nodes + 1) {
+            // TODO: disallowing 1 from stealing because its the leader
+            for pid in (2..num_nodes + 1) {
                 if !all_orderings[pid].contains(&slot_idx) {
                     stealers.push(pid as NodeId);
                 }
