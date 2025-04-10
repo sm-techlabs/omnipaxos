@@ -140,8 +140,8 @@ impl Metronome {
 
     pub fn in_worksteal_order(&self, slot_idx: usize, compromised_node: NodeId) -> bool {
         let metronome_slot_idx = slot_idx % self.total_len;
-        if !self.all_orderings[compromised_node].contains(&metronome_slot_idx) {
-            return False;
+        if !self.all_orderings[compromised_node as usize].contains(&metronome_slot_idx) {
+            return false;
         }
 
         let workstealers = &self.worksteal_orderings[metronome_slot_idx];
