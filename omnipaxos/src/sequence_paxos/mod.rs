@@ -9,7 +9,7 @@ use crate::{
         Entry, Snapshot, StopSign, Storage,
     },
     util::{
-        defaults, FlexibleQuorum, FollowerDecidedSlots, LogSync, NodeId, Quorum, SequenceNumber,
+        defaults, DecidedSlots, FlexibleQuorum, LogSync, NodeId, Quorum, SequenceNumber,
         READ_ERROR_MSG, WRITE_ERROR_MSG,
     },
     BatchSetting, ClusterConfig, CompactionErr, MetronomeSetting, OmniPaxosConfig, ProposeErr,
@@ -47,9 +47,8 @@ where
     metronome_setting: MetronomeSetting,
     batch_setting: BatchSetting,
     accepted_slots_cache: Vec<usize>,
-    decided_slots_since_last_call: Vec<usize>, // TODO: fix this for followers, currently only leader keeps track of this.
     acceptor_decided_slots_cache: Vec<Vec<usize>>,
-    follower_decided_slots: FollowerDecidedSlots,
+    decided_slots: DecidedSlots,
     #[cfg(feature = "logging")]
     logger: Logger,
 }
@@ -126,9 +125,8 @@ where
             accepted_slots_cache: Vec::new(),
             metronome,
             metronome2,
-            decided_slots_since_last_call: Vec::with_capacity(1000),
             acceptor_decided_slots_cache: vec![Vec::new(); num_nodes + 1],
-            follower_decided_slots: FollowerDecidedSlots::new(),
+            decided_slots: DecidedSlots::new(),
             #[cfg(feature = "logging")]
             logger: {
                 if let Some(logger) = config.custom_logger {
@@ -181,17 +179,6 @@ where
 
     pub(crate) fn get_promise(&self) -> Ballot {
         self.internal_storage.get_promise()
-    }
-
-    pub(crate) fn add_decided_slot(&mut self, slot_idx: usize) {
-        self.decided_slots_since_last_call.push(slot_idx);
-    }
-
-    pub fn take_decided_slots_since_last_call(&mut self, decided_slots_buffer: &mut Vec<usize>) {
-        std::mem::swap(
-            &mut self.decided_slots_since_last_call,
-            decided_slots_buffer,
-        );
     }
 
     /// Initiates the trim process.

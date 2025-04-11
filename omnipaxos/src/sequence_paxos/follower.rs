@@ -97,10 +97,10 @@ where
             && self.handle_sequence_num(acc_dec.seq_num, acc_dec.n.pid) == MessageStatus::Expected
         {
             // Handle decided slots
-            self.follower_decided_slots
+            self.decided_slots
                 .handle_decided_slots(acc_dec.decided_slots);
             self.internal_storage
-                .set_decided_idx(self.follower_decided_slots.undecided_frontier)
+                .set_decided_idx(self.decided_slots.undecided_frontier)
                 .expect(WRITE_ERROR_MSG);
             #[cfg(not(feature = "unicache"))]
             let entries = acc_dec.entries;
@@ -145,11 +145,11 @@ where
             MetronomeSetting::RoundRobin2 => (),
             _ => unimplemented!("Worksteal only supported when Metronome2 is activated"),
         }
-        let undecided_frontier = self.follower_decided_slots.undecided_frontier;
+        let undecided_frontier = self.decided_slots.undecided_frontier;
         let accepted_idx = self.internal_storage.get_accepted_idx();
         let promise = self.internal_storage.get_promise();
         let mut pending_accepts: Vec<usize> = (undecided_frontier..accepted_idx)
-            .filter(|slot| !self.follower_decided_slots.decided_slots.contains(slot))
+            .filter(|slot| !self.decided_slots.decided_slots.contains(slot))
             .collect();
         let mut steals = 0;
         for slot_idx in pending_accepts {

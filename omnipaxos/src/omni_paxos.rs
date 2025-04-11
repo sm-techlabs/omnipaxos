@@ -362,11 +362,6 @@ where
             .expect("storage error while trying to read log entries")
     }
 
-    pub fn take_decided_slots_since_last_call(&mut self, decided_slots_buffer: &mut Vec<usize>) {
-        self.seq_paxos
-            .take_decided_slots_since_last_call(decided_slots_buffer);
-    }
-
     /// Read entries in the range `r` in the log. Returns `None` if `r` is out of bounds.
     pub fn read_entries<R>(&self, r: R) -> Option<Vec<LogEntry<T>>>
     where

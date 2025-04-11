@@ -656,14 +656,14 @@ pub(crate) struct AcceptedMetaData<T: Entry> {
     pub entries: Vec<T::EncodeResult>,
 }
 
-pub(crate) struct FollowerDecidedSlots {
+pub(crate) struct DecidedSlots {
     pub undecided_frontier: usize,
     pub decided_slots: HashSet<usize>,
 }
 
-impl FollowerDecidedSlots {
+impl DecidedSlots {
     pub(crate) fn new() -> Self {
-        FollowerDecidedSlots {
+        DecidedSlots {
             undecided_frontier: 0,
             decided_slots: HashSet::new(),
         }
@@ -671,15 +671,22 @@ impl FollowerDecidedSlots {
 
     pub(crate) fn handle_decided_slots(&mut self, decided_slots: Vec<usize>) {
         for slot_idx in decided_slots {
-            if slot_idx == self.undecided_frontier {
-                self.undecided_frontier += 1;
-                while self.decided_slots.remove(&self.undecided_frontier) {
-                    self.undecided_frontier += 1;
-                }
-            } else {
-                let _ = self.decided_slots.insert(slot_idx);
-            }
-            if self.decided_slots.contains(&slot_idx) {}
+            self.handle_decided_slot(slot_idx);
         }
+    }
+
+    pub(crate) fn handle_decided_slot(&mut self, slot_idx: usize) {
+        if slot_idx == self.undecided_frontier {
+            self.undecided_frontier += 1;
+            while self.decided_slots.remove(&self.undecided_frontier) {
+                self.undecided_frontier += 1;
+            }
+        } else {
+            let _ = self.decided_slots.insert(slot_idx);
+        }
+    }
+
+    pub(crate) fn get_decided_count(&self) -> usize {
+        self.undecided_frontier
     }
 }
