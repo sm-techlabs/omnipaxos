@@ -151,7 +151,6 @@ where
             MetronomeSetting::RoundRobin2 => (),
             _ => unimplemented!("Worksteal only supported when Metronome2 is activated"),
         }
-        let mut steals = 0;
         let pending_accepts: Vec<usize> = self
             .leader_state
             .accepted_per_slot
@@ -164,10 +163,8 @@ where
                 .in_worksteal_order(slot_idx, compromised_node)
             {
                 self.leader_state.increment_accepted_slot(slot_idx);
-                steals += 1;
             }
         }
-        eprintln!("{}: stole {steals} Accepts", self.pid);
     }
 
     pub(crate) fn accept_entries_leader(&mut self, entries: Vec<T>) {

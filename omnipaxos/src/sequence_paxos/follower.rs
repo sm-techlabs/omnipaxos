@@ -151,17 +151,14 @@ where
         let mut pending_accepts: Vec<usize> = (undecided_frontier..accepted_idx)
             .filter(|slot| !self.decided_slots.decided_slots.contains(slot))
             .collect();
-        let mut steals = 0;
         for slot_idx in pending_accepts {
             if self
                 .metronome2
                 .in_worksteal_order(slot_idx, compromised_node)
             {
                 self.reply_accepted(promise, slot_idx);
-                steals += 1;
             }
         }
-        eprintln!("{}: stole {steals} Accepts", self.pid);
     }
 
     pub(crate) fn handle_accept_stopsign(&mut self, acc_ss: AcceptStopSign) {
