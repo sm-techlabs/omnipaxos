@@ -409,6 +409,11 @@ where
         self.seq_paxos.steal_pending_accepts(compromised_node);
     }
 
+    /// Change metronome setting
+    pub fn change_metronome_setting(&mut self, update: String) {
+        self.seq_paxos.change_metronome_setting(update);
+    }
+
     /// Propose a cluster reconfiguration. Returns an error if the current configuration has already been stopped
     /// by a previous reconfiguration request or if the `new_configuration` is invalid.
     /// `new_configuration` defines the cluster-wide configuration settings for the **next** cluster.
