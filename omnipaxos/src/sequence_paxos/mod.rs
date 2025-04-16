@@ -183,6 +183,13 @@ where
                 let metronome2 = Metronome2::with(self.pid, 5, 4);
                 self.metronome2 = metronome2;
             }
+            "NormalQuorum" => {
+                if self.peers.len() != 4 {
+                    unimplemented!("Only support changing metronome size for cluster size 5");
+                }
+                let metronome2 = Metronome2::with(self.pid, 5, 3);
+                self.metronome2 = metronome2;
+            }
             _ => unreachable!("unrecognized change metronome setting arg"),
         }
     }
