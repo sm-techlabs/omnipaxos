@@ -189,6 +189,7 @@ where
                 }
                 let metronome2 = Metronome2::with(self.pid, 5, 3);
                 self.metronome2 = metronome2;
+                self.metronome_setting = MetronomeSetting::RoundRobin2;
             }
             _ => unreachable!("unrecognized change metronome setting arg"),
         }
