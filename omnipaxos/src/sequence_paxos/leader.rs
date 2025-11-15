@@ -380,6 +380,13 @@ where
                     self.leader_state.n_leader.n
                 );
                 self.handle_majority_promises();
+            } else {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "Not completed prepare phase yet. promised: {:?}",
+                    self.leader_state.get_promised_followers()
+                );
             }
         }
     }
