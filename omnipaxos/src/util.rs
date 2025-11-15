@@ -197,7 +197,7 @@ where
             .count();
         // self.quorum.is_prepare_quorum(num_promised)
         // NOTE: changed since metronome needs all followers
-        num_promised >= self.max_pid
+        num_promised >= self.num_nodes
     }
 
     pub fn reset_promise(&mut self, pid: NodeId) {
