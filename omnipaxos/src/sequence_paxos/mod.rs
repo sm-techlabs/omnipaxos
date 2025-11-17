@@ -125,7 +125,7 @@ where
             accepted_slots_cache: Vec::new(),
             metronome,
             metronome2,
-            acceptor_decided_slots_cache: vec![Vec::new(); num_nodes + 1],
+            acceptor_decided_slots_cache: vec![Vec::new(); max_pid + 1],
             decided_slots: DecidedSlots::new(),
             #[cfg(feature = "logging")]
             logger: {
