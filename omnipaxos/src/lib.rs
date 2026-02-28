@@ -46,3 +46,7 @@ pub mod macros {
     #[doc(hidden)]
     pub use omnipaxos_macros::*;
 }
+
+/// Clock
+pub mod simulated_clock;
+pub mod dom;

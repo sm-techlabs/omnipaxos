@@ -41,6 +41,7 @@ where
     cached_promise_message: Option<Promise<T>>,
     #[cfg(feature = "logging")]
     logger: Logger,
+    // DOM
 }
 
 impl<T, B> SequencePaxos<T, B>
@@ -278,6 +279,11 @@ where
             PaxosMsg::Compaction(c) => self.handle_compaction(c),
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
+            /// DOM Messages
+            // TODO:
+            // PaxosMsg::FastPropose(payload, deadline)  => handler
+            // PaxosMsg::FastReply() => handler
+            // PaxosMsg::Sync() => handler
         }
     }
 

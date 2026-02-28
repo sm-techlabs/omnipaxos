@@ -176,6 +176,10 @@ pub mod sequence_paxos {
         Compaction(Compaction),
         AcceptStopSign(AcceptStopSign),
         ForwardStopSign(StopSign),
+        // TODO:
+        // FastPropose(),
+        // FastReply(),
+        // Sync(),
     }
 
     /// A struct for a Paxos message that also includes sender and receiver.
