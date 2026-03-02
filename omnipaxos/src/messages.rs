@@ -99,6 +99,46 @@ pub mod sequence_paxos {
         #[cfg(feature = "unicache")]
         /// Entries to be replicated.
         pub entries: Vec<T::EncodeResult>,
+        /// Addition for use with DOM
+        pub deadline: u64,
+        /// id is client_id then request_id, used to find in the late buffer
+        pub id: (u64, u64),
+    }
+    /// Thanks Gemini
+    /// These let us use AcceptDecide with the BinaryHeap
+    use std::cmp::Ordering; // This did not work at the top of the file, idk why
+
+    impl<T> PartialEq for AcceptDecide<T> 
+    where 
+        T: Entry 
+    {
+        fn eq(&self, other: &Self) -> bool {
+            self.deadline == other.deadline && self.id == other.id
+        }
+    }
+
+    impl<T> Eq for AcceptDecide<T> where T: Entry {}
+
+    impl<T> PartialOrd for AcceptDecide<T> 
+    where 
+        T: Entry 
+    {
+        fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+
+    impl<T> Ord for AcceptDecide<T> 
+    where 
+        T: Entry 
+    {
+        fn cmp(&self, other: &Self) -> Ordering {
+            // We reverse the comparison here (other vs self) 
+            // to turn the Max-Heap into a Min-Heap for deadlines.
+            other.deadline.cmp(&self.deadline)
+                // Tie-breaker: use ID if deadlines are equal
+                .then_with(|| other.id.cmp(&self.id))
+        }
     }
 
     /// Message sent by follower to leader when entries has been accepted.
@@ -153,6 +193,38 @@ pub mod sequence_paxos {
         Snapshot(Option<usize>),
     }
 
+    /// Fast Reply
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct FastReply<T> 
+    where 
+        T: Entry,
+    {
+        /// current round
+       pub n: Ballot,
+       /// request id
+       pub request_id: u64,
+       /// id of replica sending
+       pub replica_id: u64,
+       /// result only if leader (result fo state machine update)
+       pub result: Vec<T>,
+       /// hash of log
+       pub hash: u64, 
+    }
+
+    //// DOM Sync
+    /// Viv was wrong no hash here, just in the fast reply
+    #[allow(missing_docs)]
+    #[derive(Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct FastSync {
+        pub n: Ballot,
+        pub client_id: u64,
+        pub request_id: u64,
+        pub deadline: u64,
+        pub decided_index: usize,
+    }
+
     /// An enum for all the different message types.
     #[allow(missing_docs)]
     #[derive(Clone, Debug)]
@@ -177,9 +249,9 @@ pub mod sequence_paxos {
         AcceptStopSign(AcceptStopSign),
         ForwardStopSign(StopSign),
         // TODO:
-        // FastPropose(),
-        // FastReply(),
-        // Sync(),
+        FastPropose(AcceptDecide<T>),
+        FastReply(FastReply<T>),
+        Sync(FastSync),
     }
 
     /// A struct for a Paxos message that also includes sender and receiver.

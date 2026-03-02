@@ -209,6 +209,8 @@ where
                         seq_num: self.leader_state.next_seq_num(pid),
                         decided_idx,
                         entries: accepted.entries.clone(),
+                        id: (0, 0),
+                        deadline: self.dom.get_one_way_delay(),
                     };
                     self.outgoing.push(Message::SequencePaxos(PaxosMessage {
                         from: self.pid,

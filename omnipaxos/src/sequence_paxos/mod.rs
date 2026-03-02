@@ -11,6 +11,7 @@ use crate::{
         FlexibleQuorum, LogSync, NodeId, Quorum, SequenceNumber, READ_ERROR_MSG, WRITE_ERROR_MSG,
     },
     ClusterConfig, CompactionErr, OmniPaxosConfig, ProposeErr,
+    dom::DOM,
 };
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn, Logger};
@@ -42,6 +43,7 @@ where
     #[cfg(feature = "logging")]
     logger: Logger,
     // DOM
+    dom: DOM<T>,
 }
 
 impl<T, B> SequencePaxos<T, B>
@@ -109,6 +111,7 @@ where
                     create_logger(s.as_str())
                 }
             },
+            dom: DOM::new(),
         };
         paxos
             .internal_storage
@@ -279,11 +282,10 @@ where
             PaxosMsg::Compaction(c) => self.handle_compaction(c),
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
-            /// DOM Messages
-            // TODO:
-            // PaxosMsg::FastPropose(payload, deadline)  => handler
-            // PaxosMsg::FastReply() => handler
-            // PaxosMsg::Sync() => handler
+            // DOM Messages
+            PaxosMsg::FastPropose(payload )  => self.dom.handle_fast_propose(payload), 
+            PaxosMsg::FastReply(fast_accept) => self.dom.handle_fast_reply(fast_accept),
+            PaxosMsg::Sync(fast_sync) => self.dom.handle_fast_sync(fast_sync),
         }
     }
 
