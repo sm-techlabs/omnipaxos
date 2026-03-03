@@ -100,7 +100,7 @@ pub mod sequence_paxos {
         /// Entries to be replicated.
         pub entries: Vec<T::EncodeResult>,
         /// Addition for use with DOM
-        pub deadline: u64,
+        pub deadline: i64,
         /// id is client_id then request_id, used to find in the late buffer
         pub id: (u64, u64),
     }
@@ -221,8 +221,8 @@ pub mod sequence_paxos {
         pub n: Ballot,
         pub client_id: u64,
         pub request_id: u64,
-        pub deadline: u64,
-        pub decided_index: usize,
+        pub deadline: i64,
+        pub log_index: usize,
     }
 
     /// An enum for all the different message types.

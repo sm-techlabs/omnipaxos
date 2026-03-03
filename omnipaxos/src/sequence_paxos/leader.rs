@@ -210,7 +210,7 @@ where
                         decided_idx,
                         entries: accepted.entries.clone(),
                         id: (0, 0),
-                        deadline: self.dom.get_one_way_delay(),
+                        deadline: self.dom.get_deadline(),
                     };
                     self.outgoing.push(Message::SequencePaxos(PaxosMessage {
                         from: self.pid,

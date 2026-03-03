@@ -111,7 +111,8 @@ where
                     create_logger(s.as_str())
                 }
             },
-            dom: DOM::new(),
+            // viv - got lazy again, 3 is the fast path quorum size, which is likely math.ceil(1.5*config.flexiblequorum)
+            dom: DOM::new(3),
         };
         paxos
             .internal_storage
@@ -263,6 +264,30 @@ where
         self.latest_accepted_meta = None;
     }
 
+    fn handle_fast_reply(&mut self, fr: FastReply<T>) {
+        let decided = self.dom.handle_fast_reply(&fr);
+        if decided {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "Fast Path Accepted Value {:?}", (fr.replica_id, fr.request_id), 
+            );
+        }
+    }
+
+    /// Viv - I am lazy but we need to handle the case where the sync is received before the value is released to the log
+    /// probably need to store the sync message in that case
+    fn handle_fast_sync(&mut self, fs: FastSync) {
+        let in_sync = self.dom.handle_fast_sync(&fs); 
+        if !in_sync {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "Out of sync for log index {:?}", fs.log_index 
+            );
+        }
+    }
+
     /// Handle an incoming message.
     pub(crate) fn handle(&mut self, m: PaxosMessage<T>) {
         match m.msg {
@@ -284,8 +309,8 @@ where
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
             // DOM Messages
             PaxosMsg::FastPropose(payload )  => self.dom.handle_fast_propose(payload), 
-            PaxosMsg::FastReply(fast_accept) => self.dom.handle_fast_reply(fast_accept),
-            PaxosMsg::Sync(fast_sync) => self.dom.handle_fast_sync(fast_sync),
+            PaxosMsg::FastReply(fast_accept) => self.handle_fast_reply(fast_accept),
+            PaxosMsg::Sync(fast_sync) => self.handle_fast_sync(fast_sync),
         }
     }
 
