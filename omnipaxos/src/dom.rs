@@ -115,15 +115,25 @@ where
 
     /// Releases a message from the queue if its deadline has passed
     /// Puts some metadata into the log for use during sync
-    pub fn release_message(&mut self) -> AcceptDecide<T> {
-        let nxt_msg = self.early_buffer.pop().expect("No messages on DOM message release timer");
-        let meta = DomMetadata{
-            id: nxt_msg.id,
-            deadline: nxt_msg.deadline,
-        };
-        self.metadata_log.push(meta);
-        self.last_released_timestamp = nxt_msg.deadline;
-        return nxt_msg;
+    pub fn release_message(&mut self) -> Option<AcceptDecide<T>> {
+        let nxt_deadline = self.peek_next_deadline();
+        match nxt_deadline {
+            None => None,
+            Some(nxt_deadline) => {
+                if nxt_deadline <= self.sim_clock.get_time() {
+                    let nxt_msg = self.early_buffer.pop().expect("No messages on DOM message release timer");
+                    let meta = DomMetadata{
+                        id: nxt_msg.id,
+                        deadline: nxt_msg.deadline,
+                    };
+                    self.metadata_log.push(meta);
+                    self.last_released_timestamp = nxt_msg.deadline;
+                    return Some(nxt_msg);
+                } else {
+                    None
+                }
+            },
+        }
     }
 
     /// Returns the expected max one way delay to be used as a deadline
