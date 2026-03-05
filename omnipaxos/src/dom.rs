@@ -21,7 +21,8 @@ where
     T: Entry
 {
     early_buffer: BinaryHeap<AcceptDecide<T>>,
-    late_buffer: HashMap<(u64, u64), AcceptDecide<T>>,
+    /// late buffer
+    pub late_buffer: HashMap<(u64, u64), AcceptDecide<T>>,
     sim_clock: ClockState,
     last_released_timestamp: i64,
     last_log_hash: u64,
@@ -121,6 +122,7 @@ where
             deadline: nxt_msg.deadline,
         };
         self.metadata_log.push(meta);
+        self.last_released_timestamp = nxt_msg.deadline;
         return nxt_msg;
     }
 
