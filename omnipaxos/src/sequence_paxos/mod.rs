@@ -278,7 +278,7 @@ where
     /// Viv - I am lazy but we need to handle the case where the sync is received before the value is released to the log
     /// probably need to store the sync message in that case
     fn handle_fast_sync(&mut self, fs: FastSync) {
-        let in_sync = self.dom.handle_fast_sync(&fs); 
+        let (in_sync, _)  = self.dom.handle_fast_sync(&fs); 
         if !in_sync {
             #[cfg(feature = "logging")]
             info!(

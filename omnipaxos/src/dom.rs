@@ -1,9 +1,4 @@
-// TODO:
-// Replace OmniPaxosMessage with <T>: Entry
-
-
 use std::collections::{BinaryHeap, HashMap};
-use std::time::Duration;
 // use crate because not binary target (some languages make imports very difficult)
 use crate::messages::sequence_paxos::{AcceptDecide, FastReply, FastSync};
 use crate::simulated_clock::ClockState;
@@ -74,7 +69,7 @@ where
             .and_modify(|count| *count += 1)
             .or_insert(1);
         if *num_replies >= self.fast_quorum_size {
-            return false;
+            return true;
         } else {
             return false;
         }
@@ -82,26 +77,39 @@ where
 
     /// Handles a fast sync message 
     /// Compares the value at log_id to the metadata in the sync message
-    pub fn handle_fast_sync(&mut self, fs: &FastSync) -> bool {
+    /// returns true if all good
+    /// returns false if not synchronize
+    /// second value is update missed log entry if it can be found in the late buffer, else None
+    pub fn handle_fast_sync(&mut self, fs: &FastSync) -> (bool, Option<AcceptDecide<T>>) {
         let md = self.metadata_log.get(fs.log_index);
         match md {
-            None => return false,
+            None => return (false, None),
             Some(md) => {
                 if md.id == (fs.client_id, fs.request_id) && md.deadline == fs.deadline {
-                    return true; // in sync
+                    return (true, None); // in sync
                 } else {
                     // can we find the correct value in the late buffer
                     let key = (fs.client_id, fs.request_id);
                     match self.late_buffer.remove(&key) {
-                        None => return false, //oh fuck
+                        None => return (false, None), //oh fuck
                         Some(missed_log_entry) => {
                             // update log
+                            let meta = DomMetadata{
+                                id: missed_log_entry.id,
+                                deadline: fs.deadline,
+                            };
+                            self.metadata_log[fs.log_index] = meta;
+                            // update so the entry has the new deadline 
+                            let updated_log_entry = AcceptDecide{
+                                deadline: fs.deadline,
+                                ..missed_log_entry
+                            };
+                            return (false, Some(updated_log_entry));
                         }
                     }
                 }
             }
         }
-        return false;
     }
 
     /// Releases a message from the queue if its deadline has passed
