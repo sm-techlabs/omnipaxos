@@ -291,6 +291,8 @@ fn atomic_storage_trim_test() {
                     Value::with_id(5),
                     Value::with_id(6),
                 ],
+                deadline: 0,
+                id: (0, 0),
             }),
         });
         op.handle_incoming(setup_msg);
@@ -355,6 +357,8 @@ fn atomic_storage_snapshot_test() {
                     Value::with_id(5),
                     Value::with_id(6),
                 ],
+                deadline: 0,
+                id: (0, 0),
             }),
         });
         op.handle_incoming(setup_msg);
@@ -433,6 +437,8 @@ fn atomic_storage_accept_decide_test() {
                     Value::with_id(5),
                     Value::with_id(6),
                 ],
+                deadline: 0,
+                id: (0,0),
             }),
         });
         let _res = catch_unwind(AssertUnwindSafe(|| op.handle_incoming(msg.clone())));

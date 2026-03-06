@@ -49,4 +49,5 @@ pub mod macros {
 
 /// Clock
 pub mod simulated_clock;
+/// Deadline Ordered Multicast
 pub mod dom;

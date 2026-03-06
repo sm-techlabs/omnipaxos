@@ -1,95 +1,149 @@
-// TODO:
-// Replace OmniPaxosMessage with <T>: Entry
-
-
 use std::collections::{BinaryHeap, HashMap};
-use std::time::Duration;
-use omnipaxos::{messages::Message as OmniPaxosMessage, util::NodeId};
 // use crate because not binary target (some languages make imports very difficult)
-use crate::common::{kv::*, messages::*, utils::Timestamp};
+use crate::messages::sequence_paxos::{AcceptDecide, FastReply, FastSync};
 use crate::simulated_clock::ClockState;
+use crate::storage::Entry;
 
-use tokio::sync::mpsc;
-use tokio::time::{sleep_until, Instant};
-use std::sync::Arc;
+/// This stores meta data that is used during the sync operation.
+pub struct DomMetadata {
+    id: (u64, u64),
+    deadline: i64,
+}
 
 // TODO:
 // generateLogHash()
 // sendSync({view-id, client-id,request-id,deadline,log-id})
 // handleSync({view-id, client-id,request-id,deadline,log-id}) -> 
 // lateBufferLookup({request-id, client-id})
-pub struct DOM {
-    early_buffer: BinaryHeap<FastPropose<T>>,
-    late_buffer: HashMap<(i64, i64), <FastPropose<T>>,
+/// Deadline Ordered M
+pub struct DOM<T> 
+where 
+    T: Entry
+{
+    early_buffer: BinaryHeap<AcceptDecide<T>>,
+    /// late buffer
+    pub late_buffer: HashMap<(u64, u64), AcceptDecide<T>>,
     sim_clock: ClockState,
     last_released_timestamp: i64,
     last_log_hash: u64,
+    fast_reply_tracker: HashMap<(u64, u64), u64>,
+    fast_quorum_size: u64,
+    metadata_log: Vec<DomMetadata>
 }
 
-pub enum DomInput {
-    Message(NezhaCommand),
-}
-
-impl DOM {
-    pub fn new() -> DOM {
+impl<T> DOM<T> 
+where 
+    T: Entry
+{
+    /// Returns a new DOM
+    pub fn new(fqs: u64) -> DOM<T> {
         return DOM {
             early_buffer: BinaryHeap::new(),
             late_buffer: HashMap::new(),
             sim_clock: ClockState::new(0, 100, 100, 10),
             last_released_timestamp: 0,
             last_log_hash: 0,
+            fast_reply_tracker: HashMap::new(),
+            fast_quorum_size: fqs, 
+            metadata_log: Vec::new(),
         }
     }
 
-    pub fn handle_nezha_message(&mut self, nc: NezhaCommand) {
-        if nc.deadline() > self.last_released_timestamp {
-            self.early_buffer.push(nc);
+    /// Handles a fast path propose
+    pub fn handle_fast_propose(&mut self, ac: AcceptDecide<T>) {
+        if ac.deadline > self.last_released_timestamp {
+            self.early_buffer.push(ac);
         } else {
-            self.late_buffer.insert(nc.id(), nc.msg);
+            self.late_buffer.insert(ac.id, ac);
         }
     }
 
-    pub fn release_message(&mut self) -> NezhaCommand {
-        self.early_buffer.pop().expect("No messages on DOM message release timer")
+    /// Handles a fast path reply
+    /// Returns true when the number of messages meets or exceeds fast quorum size reqs
+    pub fn handle_fast_reply(&mut self, fr: &FastReply<T>) -> bool {
+        // hash value must match to know the proposed value is stored in a correct replica
+        if fr.hash != self.last_log_hash {
+            return false
+        }
+        let num_replies = self.fast_reply_tracker
+            .entry((fr.replica_id, fr.request_id))
+            .and_modify(|count| *count += 1)
+            .or_insert(1);
+        if *num_replies >= self.fast_quorum_size {
+            return true;
+        } else {
+            return false;
+        }
     }
 
-    pub fn peek_next_deadline(&mut self) -> Option<Instant> {
-        let next_nc = self.early_buffer.peek()?;
-        // decide if we are doing micros or millis, current micros
-        let delta = (next_nc.deadline() - self.sim_clock.get_time()).max(0);
-        Some(Instant::now() + Duration::from_micros(delta.try_into().unwrap()))
-    }
-}
-
-pub fn start_dom() -> mpsc::Sender<DomInput> {
-    let (tx, mut rx) = mpsc::channel(1024);
-
-    tokio::spawn(async move {
-        let mut dom = DOM::new();
-        let mut next_deadline: Option<Instant> = None;
-
-        loop {
-            tokio::select! {
-                Some(input) = rx.recv() => {
-                    match input {
-                        DomInput::Message(cmd) => {
-                            dom.handle_nezha_message(cmd);
-                            next_deadline = dom.peek_next_deadline();
+    /// Handles a fast sync message 
+    /// Compares the value at log_id to the metadata in the sync message
+    /// returns true if all good
+    /// returns false if not synchronize
+    /// second value is update missed log entry if it can be found in the late buffer, else None
+    pub fn handle_fast_sync(&mut self, fs: &FastSync) -> (bool, Option<AcceptDecide<T>>) {
+        let md = self.metadata_log.get(fs.log_index);
+        match md {
+            None => return (false, None),
+            Some(md) => {
+                if md.id == (fs.client_id, fs.request_id) && md.deadline == fs.deadline {
+                    return (true, None); // in sync
+                } else {
+                    // can we find the correct value in the late buffer
+                    let key = (fs.client_id, fs.request_id);
+                    match self.late_buffer.remove(&key) {
+                        None => return (false, None), //oh fuck
+                        Some(missed_log_entry) => {
+                            // update log
+                            let meta = DomMetadata{
+                                id: missed_log_entry.id,
+                                deadline: fs.deadline,
+                            };
+                            self.metadata_log[fs.log_index] = meta;
+                            // update so the entry has the new deadline 
+                            let updated_log_entry = AcceptDecide{
+                                deadline: fs.deadline,
+                                ..missed_log_entry
+                            };
+                            return (false, Some(updated_log_entry));
                         }
                     }
                 }
-
-                _ = async {
-                    if let Some(dl) = next_deadline {
-                        sleep_until(dl).await;
-                    }
-                }, if next_deadline.is_some() => {
-                    dom.release_message();
-                    next_deadline = dom.peek_next_deadline();
-                }
             }
         }
-    });
+    }
 
-    tx
+    /// Releases a message from the queue if its deadline has passed
+    /// Puts some metadata into the log for use during sync
+    pub fn release_message(&mut self) -> Option<AcceptDecide<T>> {
+        let nxt_deadline = self.peek_next_deadline();
+        match nxt_deadline {
+            None => None,
+            Some(nxt_deadline) => {
+                if nxt_deadline <= self.sim_clock.get_time() {
+                    let nxt_msg = self.early_buffer.pop().expect("No messages on DOM message release timer");
+                    let meta = DomMetadata{
+                        id: nxt_msg.id,
+                        deadline: nxt_msg.deadline,
+                    };
+                    self.metadata_log.push(meta);
+                    self.last_released_timestamp = nxt_msg.deadline;
+                    return Some(nxt_msg);
+                } else {
+                    None
+                }
+            },
+        }
+    }
+
+    /// Returns the expected max one way delay to be used as a deadline
+    pub fn get_deadline(&mut self) -> i64 {
+        self.sim_clock.get_time() + 50
+    }
+
+    /// lets us see the next deadline if there is a message in the early queue
+    pub fn peek_next_deadline(&mut self) -> Option<i64> {
+        let next_fp = self.early_buffer.peek()?;
+        Some(next_fp.deadline)
+    }
 }
