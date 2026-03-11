@@ -3,13 +3,20 @@ use std::collections::{BinaryHeap, HashMap};
 use crate::messages::sequence_paxos::{AcceptDecide, FastReply, FastSync};
 use crate::simulated_clock::ClockState;
 use crate::storage::Entry;
+use std::hash::{Hash, Hasher, DefaultHasher};
 
 /// This stores meta data that is used during the sync operation.
+#[derive(Hash)]
 pub struct DomMetadata {
     id: (u64, u64),
     deadline: i64,
 }
 
+fn calculate_hash<T: Hash>(t: &T) -> u64 {
+    let mut s = DefaultHasher::new();
+    t.hash(&mut s);
+    s.finish()
+}
 // TODO:
 // generateLogHash()
 // sendSync({view-id, client-id,request-id,deadline,log-id})
@@ -25,7 +32,8 @@ where
     pub late_buffer: HashMap<(u64, u64), AcceptDecide<T>>,
     sim_clock: ClockState,
     last_released_timestamp: i64,
-    last_log_hash: u64,
+    /// hash value
+    pub last_log_hash: u64,
     fast_reply_tracker: HashMap<(u64, u64), u64>,
     fast_quorum_size: u64,
     metadata_log: Vec<DomMetadata>
@@ -115,6 +123,7 @@ where
 
     /// Releases a message from the queue if its deadline has passed
     /// Puts some metadata into the log for use during sync
+    /// Sequence Paxos needs to get the hash value after this, as this updates the hash value
     pub fn release_message(&mut self) -> Option<AcceptDecide<T>> {
         let nxt_deadline = self.peek_next_deadline();
         match nxt_deadline {
@@ -126,6 +135,8 @@ where
                         id: nxt_msg.id,
                         deadline: nxt_msg.deadline,
                     };
+                    // log is updated here!!!
+                    self.generate_log_hash(&meta);
                     self.metadata_log.push(meta);
                     self.last_released_timestamp = nxt_msg.deadline;
                     return Some(nxt_msg);
@@ -145,5 +156,9 @@ where
     pub fn peek_next_deadline(&mut self) -> Option<i64> {
         let next_fp = self.early_buffer.peek()?;
         Some(next_fp.deadline)
+    }
+
+    fn generate_log_hash(&mut self, prop_val: &DomMetadata) {
+        self.last_log_hash = self.last_log_hash ^ calculate_hash(prop_val);
     }
 }
