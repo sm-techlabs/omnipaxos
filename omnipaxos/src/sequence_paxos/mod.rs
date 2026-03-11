@@ -291,23 +291,26 @@ where
     /// We need a way to call this, basically KV will need another timer that calls this tick function
     /// used to release messages
     pub fn tick(&mut self) {
-        match self.dom.release_message() {
-            None => return,
-            Some(prop_msg) => {
-                let hash = self.dom.last_log_hash;
-                let fr: FastReply<T>= FastReply {
-                    n: prop_msg.n,
-                    request_id: prop_msg.id.1,
-                    replica_id: self.pid,
-                    result: None,
-                    hash: hash,
-                };
-                let to_send = Message::SequencePaxos(PaxosMessage {
-                    from: self.pid,
-                    to: prop_msg.id.0,
-                    msg: PaxosMsg::FastReply(fr),
-                });
-                self.outgoing.push(to_send);
+        loop {
+            match self.dom.release_message() {
+                None => return,
+                Some(prop_msg) => {
+                    // hash is updated if message is released
+                    let hash = self.dom.last_log_hash;
+                    let fr: FastReply<T>= FastReply {
+                        n: prop_msg.n,
+                        request_id: prop_msg.id.1,
+                        replica_id: self.pid,
+                        result: None,
+                        hash: hash,
+                    };
+                    let to_send = Message::SequencePaxos(PaxosMessage {
+                        from: self.pid,
+                        to: prop_msg.id.0,
+                        msg: PaxosMsg::FastReply(fr),
+                    });
+                    self.outgoing.push(to_send);
+                }
             }
         }
     }
