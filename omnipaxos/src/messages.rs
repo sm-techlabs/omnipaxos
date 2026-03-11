@@ -101,7 +101,7 @@ pub mod sequence_paxos {
         pub entries: Vec<T::EncodeResult>,
         /// Addition for use with DOM
         pub deadline: i64,
-        /// id is client_id then request_id, used to find in the late buffer
+        /// id is coordinator_id then request_id, used to find in the late buffer
         pub id: (u64, u64),
     }
     /// Thanks Gemini
@@ -207,7 +207,7 @@ pub mod sequence_paxos {
        /// id of replica sending
        pub replica_id: u64,
        /// result only if leader (result fo state machine update)
-       pub result: Vec<T>,
+       pub result: Option<Vec<T>>,
        /// hash of log
        pub hash: u64, 
     }
