@@ -233,6 +233,46 @@ fn test_fast_reply_handler_incorrect_hash() {
 }
 
 #[test]
+fn test_fast_reply_handler_incorrect_hash_slow_reply_fix() {
+    // Arrange: Initialize a DOM with a fast quorum size of 3
+    let mut dom = DOM::<Value>::new(3);
+    let request_id: u64 = 123;
+    let bal = Ballot::with(0, 0, 0, 0);
+    let hash = 123456;
+    // 2 fast replies from followers
+    let fr_follower1 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 1,
+        result: None,
+        hash: hash,
+    };
+    let fr_follower2 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 2,
+        result: None,
+        hash: 54321,
+    };
+    // one fast reply from leader
+    let fr_leader = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 0,
+        result: None,
+        hash: hash,
+    };
+
+    let rfr1 = dom.handle_fast_reply(fr_follower1, false);
+    let rfr2 = dom.handle_fast_reply(fr_follower2, false);
+    dom.fake_increment_slow_replies(2, request_id);
+    let rfr3 = dom.handle_fast_reply(fr_leader, true);
+    assert_eq!(rfr1, false);
+    assert_eq!(rfr2, false);
+    assert_eq!(rfr3, true);
+}
+
+#[test]
 fn test_fast_reply_handler_leader_first() {
     // Arrange: Initialize a DOM with a fast quorum size of 3
     let mut dom = DOM::<Value>::new(3);

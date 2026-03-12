@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 // use crate because not binary target (some languages make imports very difficult)
 use crate::messages::sequence_paxos::{AcceptDecide, FastReply, FastSync};
 use crate::simulated_clock::ClockState;
@@ -17,8 +17,8 @@ pub struct QuorumData<T>
 where 
     T: Entry
 {
-    fast_response: u64,
-    slow_response: u64,
+    fast_response: HashSet<u64>,
+    slow_response: HashSet<u64>,
     leader_response: bool,
     hash_value: u64,
     unhandled_replies: Vec<FastReply<T>>,
@@ -47,7 +47,7 @@ where
     /// hash value
     pub last_log_hash: u64,
     fast_reply_tracker: HashMap<(u64, u64), QuorumData<T>>,
-    fast_quorum_size: u64,
+    fast_quorum_size: usize,
     metadata_log: Vec<DomMetadata>
 }
 
@@ -56,7 +56,7 @@ where
     T: Entry
 {
     /// Returns a new DOM
-    pub fn new(fqs: u64) -> DOM<T> {
+    pub fn new(fqs: usize) -> DOM<T> {
         return DOM {
             early_buffer: BinaryHeap::new(),
             late_buffer: HashMap::new(),
@@ -85,14 +85,14 @@ where
         let qd = self.fast_reply_tracker
             .entry(key)
             .or_insert(QuorumData { 
-                fast_response: 0, 
-                slow_response: 0, 
+                fast_response: HashSet::new(), 
+                slow_response: HashSet::new(), 
                 leader_response: false, 
                 hash_value: 0, 
                 unhandled_replies: Vec::new(),
             });
         if leader {
-            qd.fast_response += 1;
+            qd.fast_response.insert(fr.replica_id);
             qd.leader_response = true;
             qd.hash_value = fr.hash;
         } else {
@@ -101,10 +101,10 @@ where
         if qd.leader_response {
             while let Some(fr) = qd.unhandled_replies.pop() {
                 if fr.hash == qd.hash_value {
-                    qd.fast_response += 1;
+                    qd.fast_response.insert(fr.replica_id);
                 }
             }
-            if qd.fast_response + qd.slow_response >= self.fast_quorum_size {
+            if qd.fast_response.len() + qd.slow_response.len() >= self.fast_quorum_size {
                 return true;
             } else {
                 return false;
@@ -117,8 +117,18 @@ where
 
     /// Fake function to integrate slow responses for testing the 
     /// fast reply handler
-    pub fn fake_increment_slow_replies(pid: u64) {
-
+    pub fn fake_increment_slow_replies(&mut self, pid: u64, request_id: u64) {
+        let key = (0, request_id);
+        let qd = self.fast_reply_tracker
+            .entry(key)
+            .or_insert(QuorumData { 
+                fast_response: HashSet::new(), 
+                slow_response: HashSet::new(), 
+                leader_response: false, 
+                hash_value: 0, 
+                unhandled_replies: Vec::new(),
+            });
+        qd.slow_response.insert(pid);
     }
 
     /// Handles a fast sync message 
