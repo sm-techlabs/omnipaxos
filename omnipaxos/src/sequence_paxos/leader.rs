@@ -248,6 +248,8 @@ where
             n: self.leader_state.n_leader,
             seq_num,
             decided_idx,
+            // maybe we need the decided log hash here
+            hash: self.dom.last_log_hash,
         };
         self.outgoing.push(Message::SequencePaxos(PaxosMessage {
             from: self.pid,
@@ -344,6 +346,10 @@ where
                 }
             }
         }
+    }
+
+    pub(crate) fn handle_fast_accepted(&mut self, accepted: FastAccepted, from: NodeId) {
+        // TODO
     }
 
     fn get_latest_accdec_message(&mut self, to: NodeId) -> Option<&mut AcceptDecide<T>> {

@@ -168,6 +168,16 @@ where
         }
     }
 
+    /// Records metadata for an accepted entry and returns the resulting prefix hash.
+    pub fn record_accepted_metadata(&mut self, id: (u64, u64), deadline: i64, accepted_idx: usize) -> u64 {
+        if self.metadata_log.len() < accepted_idx {
+            let meta = DomMetadata { id, deadline };
+            self.generate_log_hash(&meta);
+            self.metadata_log.push(meta);
+        }
+        self.last_log_hash
+    }
+
     /// Releases a message from the queue if its deadline has passed
     /// Puts some metadata into the log for use during sync
     /// Sequence Paxos needs to get the hash value after this, as this updates the hash value

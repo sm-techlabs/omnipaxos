@@ -85,11 +85,21 @@ where
         }
     }
 
-    pub(crate) fn handle_acceptdecide(&mut self, acc_dec: AcceptDecide<T>) {
-        if self.check_valid_ballot(acc_dec.n)
+    pub(crate) fn handle_acceptdecide(
+        &mut self, acc_dec: AcceptDecide<T>,
+        is_from_early_buffer: bool,
+
+    ) {
+        if (is_from_early_buffer || self.check_valid_ballot(acc_dec.n))
             && self.state == (Role::Follower, Phase::Accept)
             && self.handle_sequence_num(acc_dec.seq_num, acc_dec.n.pid) == MessageStatus::Expected
         {
+            // Capture fields before entries are moved
+            let n = acc_dec.n;
+            let decided_idx = acc_dec.decided_idx;
+            let deadline = acc_dec.deadline;
+            let id = acc_dec.id;
+
             #[cfg(not(feature = "unicache"))]
             let entries = acc_dec.entries;
             #[cfg(feature = "unicache")]
@@ -99,12 +109,16 @@ where
                 .append_entries_and_get_accepted_idx(entries)
                 .expect(WRITE_ERROR_MSG);
             let flushed_after_decide =
-                self.update_decided_idx_and_get_accepted_idx(acc_dec.decided_idx);
+                self.update_decided_idx_and_get_accepted_idx(decided_idx);
             if flushed_after_decide.is_some() {
                 new_accepted_idx = flushed_after_decide;
             }
             if let Some(idx) = new_accepted_idx {
-                self.reply_accepted(acc_dec.n, idx);
+                if is_from_early_buffer {
+                    self.reply_fast_accepted(n, idx, deadline, id);
+                } else {
+                    self.reply_accepted(n, idx);
+                }
             }
         }
     }
@@ -130,6 +144,21 @@ where
             && self.state.1 == Phase::Accept
             && self.handle_sequence_num(dec.seq_num, dec.n.pid) == MessageStatus::Expected
         {
+            // Validate that our log matches the leader's at the decided index.
+            // If hashes don't match, our log is stale and we need to resync with the leader.
+            if dec.hash != self.dom.last_log_hash {
+                #[cfg(feature = "logging")]
+                warn!(
+                    self.logger,
+                    "Decide hash mismatch at decided_idx {}. leader_hash: {}, our_hash: {}. Reconnecting for resync.",
+                    dec.decided_idx,
+                    dec.hash,
+                    self.dom.last_log_hash
+                );
+                self.reconnected(dec.n.pid);
+                return;
+            }
+
             let new_accepted_idx = self.update_decided_idx_and_get_accepted_idx(dec.decided_idx);
             if let Some(idx) = new_accepted_idx {
                 self.reply_accepted(dec.n, idx);
@@ -172,6 +201,26 @@ where
                 }));
             }
         }
+    }
+
+    fn reply_fast_accepted(
+        &mut self,
+        n: Ballot,
+        accepted_idx: usize,
+        deadline: i64,
+        id: (u64, u64),
+    ) {
+        let hash = self.dom.record_accepted_metadata(id, deadline, accepted_idx);
+        let fast_accepted = FastAccepted {
+            n,
+            accepted_idx,
+            hash,
+        };
+        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+            from: self.pid,
+            to: n.pid,
+            msg: PaxosMsg::FastAccepted(fast_accepted),
+        }));
     }
 
     fn get_latest_accepted_message(&mut self, n: Ballot) -> Option<&mut Accepted> {

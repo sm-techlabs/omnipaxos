@@ -303,24 +303,23 @@ where
     /// We need a way to call this, basically KV will need another timer that calls this tick function
     /// used to release messages
     pub fn tick(&mut self) {
-        loop {
-            match self.dom.release_message() {
-                None => return,
-                Some(prop_msg) => {
-                    // append to log but I think this is not a decide - Pavlos/Sam pls confirm
-                    self.internal_storage.append_entries_and_get_accepted_idx(prop_msg.entries).expect(WRITE_ERROR_MSG);
-                    // hash is updated if message is released
+        match self.dom.release_message() {
+            None => return,
+            Some(prop_msg) => {
+                let coordinator_id = prop_msg.id.0;
+                if self.get_current_leader() != coordinator_id {
+                    // Hash is updated as part of DOM release_message().
                     let hash = self.dom.last_log_hash;
-                    let fr: FastReply<T>= FastReply {
+                    let fr: FastReply<T> = FastReply {
                         n: prop_msg.n,
                         request_id: prop_msg.id.1,
                         replica_id: self.pid,
                         result: None,
-                        hash: hash,
+                        hash,
                     };
                     let to_send = Message::SequencePaxos(PaxosMessage {
                         from: self.pid,
-                        to: prop_msg.id.0,
+                        to: coordinator_id,
                         msg: PaxosMsg::FastReply(fr),
                     });
                     self.outgoing.push(to_send);
@@ -335,6 +334,14 @@ where
                         to: self.get_current_leader(),
                         msg: PaxosMsg::Accepted(am),
                     }));
+                }
+
+                // Released fast-path entries can be older than our latest ballot after re-election,
+                // so process these with relaxed ballot checks.
+                if self.state.0 == Role::Leader {
+                    // Custom Leader Handle Accept Decide
+                } else {
+                    self.handle_acceptdecide(prop_msg, true);
                 }
             }
         }
@@ -351,9 +358,10 @@ where
                 _ => {}
             },
             PaxosMsg::AcceptSync(acc_sync) => self.handle_acceptsync(acc_sync, m.from),
-            PaxosMsg::AcceptDecide(acc) => self.handle_acceptdecide(acc),
+            PaxosMsg::AcceptDecide(acc) => self.handle_acceptdecide(acc, false),
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
+            PaxosMsg::FastAccepted(fast_accepted) => self.handle_fast_accepted(fast_accepted, m.from),
             PaxosMsg::Decide(d) => self.handle_decide(d),
             PaxosMsg::ProposalForward(proposals) => self.handle_forwarded_proposal(proposals),
             PaxosMsg::Compaction(c) => self.handle_compaction(c),

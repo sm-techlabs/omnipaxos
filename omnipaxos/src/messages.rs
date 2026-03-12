@@ -151,6 +151,18 @@ pub mod sequence_paxos {
         pub accepted_idx: usize,
     }
 
+    /// Message sent by follower to leader when entries have been accepted on the fast path.
+    #[derive(Copy, Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct FastAccepted {
+        /// The current round.
+        pub n: Ballot,
+        /// The accepted index.
+        pub accepted_idx: usize,
+        /// Hash of the follower's log metadata up to `accepted_idx`.
+        pub hash: u64,
+    }
+
     /// Message sent by leader to followers to decide up to a certain index in the log.
     #[derive(Copy, Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -161,6 +173,8 @@ pub mod sequence_paxos {
         pub seq_num: SequenceNumber,
         /// The decided index.
         pub decided_idx: usize,
+        /// Hash of the leader's log metadata up to `decided_idx`.
+        pub hash: u64,
     }
 
     /// Message sent by leader to followers to accept a StopSign
@@ -241,6 +255,7 @@ pub mod sequence_paxos {
         AcceptSync(AcceptSync<T>),
         AcceptDecide(AcceptDecide<T>),
         Accepted(Accepted),
+        FastAccepted(FastAccepted),
         NotAccepted(NotAccepted),
         Decide(Decide),
         /// Forward client proposals to the leader.

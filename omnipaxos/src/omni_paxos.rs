@@ -383,6 +383,9 @@ where
         if self.flush_batch_clock.tick_and_check_timeout() {
             self.seq_paxos.flush_batch_timeout();
         }
+        // Even if this introduces delay before releasing msgs from the early
+        // buffer, it doesn't mess with the deadline-based ordering
+        self.seq_paxos.tick();
     }
 
     /// Manually attempt to become the leader by incrementing this instance's Ballot. Calling this
