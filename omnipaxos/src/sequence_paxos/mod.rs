@@ -15,7 +15,7 @@ use crate::{
 };
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn, Logger};
-use std::{fmt::Debug, vec};
+use std::{collections::HashMap, fmt::Debug, vec};
 
 pub mod follower;
 pub mod leader;
@@ -44,6 +44,7 @@ where
     logger: Logger,
     // DOM
     dom: DOM<T>,
+    inflight_proposals: HashMap<(u64, u64), bool>
 }
 
 impl<T, B> SequencePaxos<T, B>
@@ -113,6 +114,7 @@ where
             },
             // viv - got lazy again, 3 is the fast path quorum size, which is likely math.ceil(1.5*config.flexiblequorum)
             dom: DOM::new(3),
+            inflight_proposals: HashMap::new(),
         };
         paxos
             .internal_storage
@@ -267,11 +269,18 @@ where
     fn handle_fast_reply(&mut self, fr: FastReply<T>) {
         let decided = self.dom.handle_fast_reply(&fr);
         if decided {
-            #[cfg(feature = "logging")]
-            info!(
-                self.logger,
-                "Fast Path Accepted Value {:?}", (fr.replica_id, fr.request_id), 
-            );
+            let key = (self.pid, fr.replica_id);
+            let replied = self.inflight_proposals.entry(key).or_insert(false);
+            if !*replied {
+                *replied = true;
+                
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "Fast Path Accepted Value {:?}", (fr.replica_id, fr.request_id), 
+                );
+                // reply to client here
+            }
         }
     }
 

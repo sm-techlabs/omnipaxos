@@ -12,6 +12,14 @@ pub struct DomMetadata {
     deadline: i64,
 }
 
+/// Used to track what quorums have been reached for a given request
+pub struct QuorumData {
+    fast_response: u64,
+    slow_response: u64,
+    leader_response: bool,
+    hash_value: u64,
+}
+
 fn calculate_hash<T: Hash>(t: &T) -> u64 {
     let mut s = DefaultHasher::new();
     t.hash(&mut s);
@@ -34,7 +42,7 @@ where
     last_released_timestamp: i64,
     /// hash value
     pub last_log_hash: u64,
-    fast_reply_tracker: HashMap<(u64, u64), u64>,
+    fast_reply_tracker: HashMap<(u64, u64), QuorumData>,
     fast_quorum_size: u64,
     metadata_log: Vec<DomMetadata>
 }
@@ -73,11 +81,15 @@ where
         if fr.hash != self.last_log_hash {
             return false
         }
-        let num_replies = self.fast_reply_tracker
-            .entry((fr.replica_id, fr.request_id))
-            .and_modify(|count| *count += 1)
-            .or_insert(1);
-        if *num_replies >= self.fast_quorum_size {
+        let key = (0, fr.request_id);
+        let qd = self.fast_reply_tracker
+            .entry(key)
+            .or_insert(QuorumData { fast_response: 1, slow_response: 0, leader_response: false, hash_value: 0 });
+        // let num_replies = self.fast_reply_tracker
+        //     .entry((fr.replica_id, fr.request_id))
+        //     .and_modify(|count| *count += 1)
+        //     .or_insert(1);
+        if qd.fast_response >= self.fast_quorum_size {
             return true;
         } else {
             return false;
