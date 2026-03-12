@@ -349,7 +349,95 @@ where
     }
 
     pub(crate) fn handle_fast_accepted(&mut self, accepted: FastAccepted, from: NodeId) {
-        // TODO
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[RECV][FAST_ACCEPTED] from={} coordinator={} request={} accepted_idx={} hash={}",
+            from,
+            accepted.coordinator_id,
+            accepted.request_id,
+            accepted.accepted_idx,
+            accepted.hash,
+        );
+
+        if accepted.n == self.leader_state.n_leader && self.state == (Role::Leader, Phase::Accept) {
+            self.leader_state
+                .set_accepted_idx(from, accepted.accepted_idx);
+            if accepted.accepted_idx > self.internal_storage.get_decided_idx()
+                && self.dom.handle_fast_accepted(accepted, from)
+            {
+                self.fast_decide(accepted.accepted_idx, accepted.hash);
+            }
+        }
+    }
+
+    pub(crate) fn handle_released_fast_entry_leader(&mut self, prop_msg: AcceptDecide<T>) {
+        let AcceptDecide {
+            id,
+            deadline,
+            entries,
+            ..
+        } = prop_msg;
+        let accepted_idx = self
+            .internal_storage
+            .append_entries_without_batching(entries)
+            .expect(WRITE_ERROR_MSG);
+        self.leader_state.set_accepted_idx(self.pid, accepted_idx);
+
+        let hash = self
+            .dom
+            .record_accepted_metadata(id, deadline, accepted_idx);
+        let fast_reply = FastReply {
+            n: self.leader_state.n_leader,
+            coordinator_id: id.0,
+            request_id: id.1,
+            replica_id: self.pid,
+            accepted_idx: Some(accepted_idx),
+            result: None,
+            hash,
+        };
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[INFO][FAST_PATH] leader appended coordinator={} request={} accepted_idx={} hash={}",
+            id.0,
+            id.1,
+            accepted_idx,
+            hash,
+        );
+        self.dispatch_fast_reply(fast_reply);
+
+        let fast_accepted = FastAccepted {
+            n: self.leader_state.n_leader,
+            coordinator_id: id.0,
+            request_id: id.1,
+            accepted_idx,
+            hash,
+        };
+        if self.dom.handle_fast_accepted(fast_accepted, self.pid)
+            && accepted_idx > self.internal_storage.get_decided_idx()
+        {
+            self.fast_decide(accepted_idx, hash);
+        }
+    }
+
+    fn fast_decide(&mut self, decided_idx: usize, _hash: u64) {
+        if decided_idx <= self.internal_storage.get_decided_idx() {
+            return;
+        }
+
+        self.internal_storage
+            .set_decided_idx(decided_idx)
+            .expect(WRITE_ERROR_MSG);
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[INFO][FAST_DECIDE] decided_idx={} hash={} broadcasting Decide", decided_idx, _hash,
+        );
+        let peers = self.peers.clone();
+        for pid in peers {
+            self.send_decide(pid, decided_idx, false);
+        }
     }
 
     fn get_latest_accdec_message(&mut self, to: NodeId) -> Option<&mut AcceptDecide<T>> {

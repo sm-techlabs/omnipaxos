@@ -47,7 +47,7 @@ pub mod macros {
     pub use omnipaxos_macros::*;
 }
 
-/// Clock
-pub mod simulated_clock;
 /// Deadline Ordered Multicast
 pub mod dom;
+/// Clock
+pub mod simulated_clock;

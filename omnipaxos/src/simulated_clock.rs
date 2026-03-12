@@ -1,6 +1,6 @@
 //! Simulated clock implementation with drift, uncertainty, and offset modeling.
-use std::time::{SystemTime, UNIX_EPOCH};
 use rand::Rng;
+use std::time::{SystemTime, UNIX_EPOCH};
 /// Internal state of a simulated clock used to model uncertainty, drift,
 /// frequency skew, and base offset.
 ///
@@ -16,7 +16,7 @@ pub struct ClockState {
     frequency: i64,
 
     /// Fixed base offset applied to all timestamps (μs).
-    base_offset: i64,  
+    base_offset: i64,
 }
 
 impl ClockState {
@@ -27,12 +27,7 @@ impl ClockState {
     /// - `drift_rate`: Drift rate applied per second.
     /// - `frequency`: Frequency used to compute drift modulation.
     /// - `base_offset`: Constant offset applied to all timestamps.
-    pub fn new(
-        uncertainty: i64,
-        drift_rate: i64,
-        frequency: i64,
-        base_offset: i64,
-    ) -> Self {
+    pub fn new(uncertainty: i64, drift_rate: i64, frequency: i64, base_offset: i64) -> Self {
         Self {
             uncertainty,
             drift_rate,
@@ -44,13 +39,7 @@ impl ClockState {
     /// Reinitializes the clock state with new parameter values.
     ///
     /// This allows reusing an existing instance without reallocating.
-    pub fn init(
-        &mut self,
-        uncertainty: i64,
-        drift_rate: i64,
-        frequency: i64,
-        base_offset: i64,
-    ) {
+    pub fn init(&mut self, uncertainty: i64, drift_rate: i64, frequency: i64, base_offset: i64) {
         self.uncertainty = uncertainty;
         self.drift_rate = drift_rate;
         self.frequency = frequency;
@@ -94,9 +83,6 @@ impl ClockState {
         let mut rng = rand::thread_rng();
         let jitter = rng.gen_range(-self.uncertainty..=self.uncertainty);
 
-        now_micros
-            + (modulo_val * self.drift_rate)
-            + self.base_offset
-            + jitter
+        now_micros + (modulo_val * self.drift_rate) + self.base_offset + jitter
     }
 }

@@ -438,7 +438,7 @@ fn atomic_storage_accept_decide_test() {
                     Value::with_id(6),
                 ],
                 deadline: 0,
-                id: (0,0),
+                id: (0, 0),
             }),
         });
         let _res = catch_unwind(AssertUnwindSafe(|| op.handle_incoming(msg.clone())));

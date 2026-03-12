@@ -86,13 +86,19 @@ where
     }
 
     pub(crate) fn handle_acceptdecide(
-        &mut self, acc_dec: AcceptDecide<T>,
+        &mut self,
+        acc_dec: AcceptDecide<T>,
         is_from_early_buffer: bool,
-
     ) {
+        let expected_sequence = if is_from_early_buffer {
+            true
+        } else {
+            self.handle_sequence_num(acc_dec.seq_num, acc_dec.n.pid) == MessageStatus::Expected
+        };
+
         if (is_from_early_buffer || self.check_valid_ballot(acc_dec.n))
             && self.state == (Role::Follower, Phase::Accept)
-            && self.handle_sequence_num(acc_dec.seq_num, acc_dec.n.pid) == MessageStatus::Expected
+            && expected_sequence
         {
             // Capture fields before entries are moved
             let n = acc_dec.n;
@@ -108,14 +114,13 @@ where
                 .internal_storage
                 .append_entries_and_get_accepted_idx(entries)
                 .expect(WRITE_ERROR_MSG);
-            let flushed_after_decide =
-                self.update_decided_idx_and_get_accepted_idx(decided_idx);
+            let flushed_after_decide = self.update_decided_idx_and_get_accepted_idx(decided_idx);
             if flushed_after_decide.is_some() {
                 new_accepted_idx = flushed_after_decide;
             }
             if let Some(idx) = new_accepted_idx {
                 if is_from_early_buffer {
-                    self.reply_fast_accepted(n, idx, deadline, id);
+                    self.reply_fast_accepted(idx, deadline, id);
                 } else {
                     self.reply_accepted(n, idx);
                 }
@@ -203,22 +208,53 @@ where
         }
     }
 
-    fn reply_fast_accepted(
+    pub(crate) fn handle_released_fast_entry_follower(
         &mut self,
-        n: Ballot,
-        accepted_idx: usize,
-        deadline: i64,
-        id: (u64, u64),
-    ) {
-        let hash = self.dom.record_accepted_metadata(id, deadline, accepted_idx);
+        prop_msg: AcceptDecide<T>,
+    ) -> FastReply<T> {
+        let coordinator_id = prop_msg.id.0;
+        let request_id = prop_msg.id.1;
+        self.handle_acceptdecide(prop_msg, true);
+        let accepted_idx = self.internal_storage.get_accepted_idx();
+        let hash = self
+            .dom
+            .get_hash_at(accepted_idx)
+            .unwrap_or(self.dom.last_log_hash);
+
+        FastReply {
+            n: self.get_promise(),
+            coordinator_id,
+            request_id,
+            replica_id: self.pid,
+            accepted_idx: None,
+            result: None,
+            hash,
+        }
+    }
+
+    fn reply_fast_accepted(&mut self, accepted_idx: usize, deadline: i64, id: (u64, u64)) {
+        let hash = self
+            .dom
+            .record_accepted_metadata(id, deadline, accepted_idx);
         let fast_accepted = FastAccepted {
-            n,
+            n: self.get_promise(),
+            coordinator_id: id.0,
+            request_id: id.1,
             accepted_idx,
             hash,
         };
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[SEND][FAST_ACCEPTED] to={} request={} accepted_idx={} hash={}",
+            self.get_current_leader(),
+            id.1,
+            accepted_idx,
+            hash,
+        );
         self.outgoing.push(Message::SequencePaxos(PaxosMessage {
             from: self.pid,
-            to: n.pid,
+            to: self.get_current_leader(),
             msg: PaxosMsg::FastAccepted(fast_accepted),
         }));
     }

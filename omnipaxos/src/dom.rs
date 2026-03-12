@@ -1,27 +1,45 @@
 use std::collections::{BinaryHeap, HashMap, HashSet};
-// use crate because not binary target (some languages make imports very difficult)
-use crate::messages::sequence_paxos::{AcceptDecide, FastReply, FastSync};
+
+use crate::messages::sequence_paxos::{AcceptDecide, FastAccepted, FastReply, FastSync};
 use crate::simulated_clock::ClockState;
 use crate::storage::Entry;
-use std::hash::{Hash, Hasher, DefaultHasher};
+use crate::util::NodeId;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// This stores meta data that is used during the sync operation.
-#[derive(Hash)]
+#[derive(Clone, Hash)]
 pub struct DomMetadata {
     id: (u64, u64),
     deadline: i64,
 }
 
 /// Used to track what quorums have been reached for a given request
-pub struct QuorumData<T> 
-where 
-    T: Entry
+struct FastReplyQuorum<T>
+where
+    T: Entry,
 {
     fast_response: HashSet<u64>,
     slow_response: HashSet<u64>,
-    leader_response: bool,
-    hash_value: u64,
-    unhandled_replies: Vec<FastReply<T>>,
+    leader_response: Option<FastReply<T>>,
+    pending_replies: Vec<FastReply<T>>,
+}
+
+struct FastAcceptedQuorum {
+    replicas: HashSet<NodeId>,
+    hash: u64,
+}
+
+/// The coordinator-side decision derived from a fast quorum of matching replies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FastPathDecision {
+    /// The coordinator that originated the request.
+    pub coordinator_id: u64,
+    /// The request identifier assigned by the coordinator.
+    pub request_id: u64,
+    /// The accepted index chosen by the leader for the request.
+    pub accepted_idx: usize,
+    /// The agreed prefix hash at `accepted_idx`.
+    pub hash: u64,
 }
 
 fn calculate_hash<T: Hash>(t: &T) -> u64 {
@@ -32,12 +50,12 @@ fn calculate_hash<T: Hash>(t: &T) -> u64 {
 // TODO:
 // generateLogHash()
 // sendSync({view-id, client-id,request-id,deadline,log-id})
-// handleSync({view-id, client-id,request-id,deadline,log-id}) -> 
+// handleSync({view-id, client-id,request-id,deadline,log-id}) ->
 // lateBufferLookup({request-id, client-id})
 /// Deadline Ordered M
-pub struct DOM<T> 
-where 
-    T: Entry
+pub struct DOM<T>
+where
+    T: Entry,
 {
     early_buffer: BinaryHeap<AcceptDecide<T>>,
     /// late buffer
@@ -46,14 +64,16 @@ where
     last_released_timestamp: i64,
     /// hash value
     pub last_log_hash: u64,
-    fast_reply_tracker: HashMap<(u64, u64), QuorumData<T>>,
+    log_hashes: Vec<u64>,
+    fast_reply_tracker: HashMap<(u64, u64), FastReplyQuorum<T>>,
+    fast_accepted_tracker: HashMap<usize, FastAcceptedQuorum>,
     fast_quorum_size: usize,
-    metadata_log: Vec<DomMetadata>
+    metadata_log: Vec<DomMetadata>,
 }
 
-impl<T> DOM<T> 
-where 
-    T: Entry
+impl<T> DOM<T>
+where
+    T: Entry,
 {
     /// Returns a new DOM
     pub fn new(fqs: usize) -> DOM<T> {
@@ -63,10 +83,12 @@ where
             sim_clock: ClockState::new(0, 100, 100, 10),
             last_released_timestamp: 0,
             last_log_hash: 0,
+            log_hashes: Vec::new(),
             fast_reply_tracker: HashMap::new(),
-            fast_quorum_size: fqs, 
+            fast_accepted_tracker: HashMap::new(),
+            fast_quorum_size: Self::fast_quorum_size(fqs),
             metadata_log: Vec::new(),
-        }
+        };
     }
 
     /// Handles a fast path propose
@@ -80,58 +102,93 @@ where
 
     /// Handles a fast path reply
     /// Returns true when the number of messages meets or exceeds fast quorum size reqs
-    pub fn handle_fast_reply(&mut self, fr: FastReply<T>, leader: bool) -> bool {
-        let key = (0, fr.request_id);
-        let qd = self.fast_reply_tracker
+    pub fn handle_fast_reply(
+        &mut self,
+        fr: FastReply<T>,
+        leader: bool,
+    ) -> Option<FastPathDecision> {
+        let key = (fr.coordinator_id, fr.request_id);
+        let qd = self
+            .fast_reply_tracker
             .entry(key)
-            .or_insert(QuorumData { 
-                fast_response: HashSet::new(), 
-                slow_response: HashSet::new(), 
-                leader_response: false, 
-                hash_value: 0, 
-                unhandled_replies: Vec::new(),
+            .or_insert(FastReplyQuorum {
+                fast_response: HashSet::new(),
+                slow_response: HashSet::new(),
+                leader_response: None,
+                pending_replies: Vec::new(),
             });
+
         if leader {
             qd.fast_response.insert(fr.replica_id);
-            qd.leader_response = true;
-            qd.hash_value = fr.hash;
+            qd.leader_response = Some(fr);
         } else {
-            qd.unhandled_replies.push(fr);
-        }
-        if qd.leader_response {
-            while let Some(fr) = qd.unhandled_replies.pop() {
-                if fr.hash == qd.hash_value {
+            match qd.leader_response.as_ref() {
+                Some(leader_reply) if leader_reply.hash == fr.hash => {
                     qd.fast_response.insert(fr.replica_id);
                 }
+                Some(_) => {}
+                None => qd.pending_replies.push(fr),
             }
-            if qd.fast_response.len() + qd.slow_response.len() >= self.fast_quorum_size {
-                return true;
-            } else {
-                return false;
-            }
-            
-        } else {
-            return false;
         }
+
+        if let Some(leader_reply) = qd.leader_response.clone() {
+            let pending_replies = std::mem::take(&mut qd.pending_replies);
+            for pending_reply in pending_replies {
+                if pending_reply.hash == leader_reply.hash {
+                    qd.fast_response.insert(pending_reply.replica_id);
+                }
+            }
+
+            if qd.fast_response.len() + qd.slow_response.len() >= self.fast_quorum_size {
+                if let Some(accepted_idx) = leader_reply.accepted_idx {
+                    return Some(FastPathDecision {
+                        coordinator_id: leader_reply.coordinator_id,
+                        request_id: leader_reply.request_id,
+                        accepted_idx,
+                        hash: leader_reply.hash,
+                    });
+                }
+            }
+        }
+
+        None
     }
 
-    /// Fake function to integrate slow responses for testing the 
+    /// Fake function to integrate slow responses for testing the
     /// fast reply handler
-    pub fn fake_increment_slow_replies(&mut self, pid: u64, request_id: u64) {
-        let key = (0, request_id);
-        let qd = self.fast_reply_tracker
+    pub fn fake_increment_slow_replies(&mut self, coordinator_id: u64, pid: u64, request_id: u64) {
+        let key = (coordinator_id, request_id);
+        let qd = self
+            .fast_reply_tracker
             .entry(key)
-            .or_insert(QuorumData { 
-                fast_response: HashSet::new(), 
-                slow_response: HashSet::new(), 
-                leader_response: false, 
-                hash_value: 0, 
-                unhandled_replies: Vec::new(),
+            .or_insert(FastReplyQuorum {
+                fast_response: HashSet::new(),
+                slow_response: HashSet::new(),
+                leader_response: None,
+                pending_replies: Vec::new(),
             });
         qd.slow_response.insert(pid);
     }
 
-    /// Handles a fast sync message 
+    /// Tracks fast accept acknowledgements at the leader.
+    pub fn handle_fast_accepted(&mut self, accepted: FastAccepted, from: NodeId) -> bool {
+        let qd = self
+            .fast_accepted_tracker
+            .entry(accepted.accepted_idx)
+            .or_insert(FastAcceptedQuorum {
+                replicas: HashSet::new(),
+                hash: accepted.hash,
+            });
+
+        if qd.hash != accepted.hash {
+            return false;
+        }
+
+        qd.replicas.insert(from);
+        qd.replicas.len() >= self.fast_quorum_size
+    }
+
+    /// Handles a fast sync message
     /// Compares the value at log_id to the metadata in the sync message
     /// returns true if all good
     /// returns false if not synchronize
@@ -150,13 +207,13 @@ where
                         None => return (false, None), //oh fuck
                         Some(missed_log_entry) => {
                             // update log
-                            let meta = DomMetadata{
+                            let meta = DomMetadata {
                                 id: missed_log_entry.id,
                                 deadline: fs.deadline,
                             };
                             self.metadata_log[fs.log_index] = meta;
-                            // update so the entry has the new deadline 
-                            let updated_log_entry = AcceptDecide{
+                            // update so the entry has the new deadline
+                            let updated_log_entry = AcceptDecide {
                                 deadline: fs.deadline,
                                 ..missed_log_entry
                             };
@@ -169,13 +226,21 @@ where
     }
 
     /// Records metadata for an accepted entry and returns the resulting prefix hash.
-    pub fn record_accepted_metadata(&mut self, id: (u64, u64), deadline: i64, accepted_idx: usize) -> u64 {
-        if self.metadata_log.len() < accepted_idx {
-            let meta = DomMetadata { id, deadline };
-            self.generate_log_hash(&meta);
-            self.metadata_log.push(meta);
+    pub fn record_accepted_metadata(
+        &mut self,
+        id: (u64, u64),
+        deadline: i64,
+        accepted_idx: usize,
+    ) -> u64 {
+        if accepted_idx == 0 {
+            return self.last_log_hash;
         }
-        self.last_log_hash
+
+        if self.metadata_log.len() < accepted_idx {
+            self.append_metadata(DomMetadata { id, deadline });
+        }
+
+        self.get_hash_at(accepted_idx).unwrap_or(self.last_log_hash)
     }
 
     /// Releases a message from the queue if its deadline has passed
@@ -187,20 +252,20 @@ where
             None => None,
             Some(nxt_deadline) => {
                 if nxt_deadline <= self.sim_clock.get_time() {
-                    let nxt_msg = self.early_buffer.pop().expect("No messages on DOM message release timer");
-                    let meta = DomMetadata{
+                    let nxt_msg = self
+                        .early_buffer
+                        .pop()
+                        .expect("No messages on DOM message release timer");
+                    self.append_metadata(DomMetadata {
                         id: nxt_msg.id,
                         deadline: nxt_msg.deadline,
-                    };
-                    // log is updated here!!!
-                    self.generate_log_hash(&meta);
-                    self.metadata_log.push(meta);
+                    });
                     self.last_released_timestamp = nxt_msg.deadline;
                     return Some(nxt_msg);
                 } else {
                     None
                 }
-            },
+            }
         }
     }
 
@@ -213,6 +278,24 @@ where
     pub fn peek_next_deadline(&mut self) -> Option<i64> {
         let next_fp = self.early_buffer.peek()?;
         Some(next_fp.deadline)
+    }
+
+    /// Returns the metadata prefix hash recorded at `accepted_idx`, if present.
+    pub fn get_hash_at(&self, accepted_idx: usize) -> Option<u64> {
+        accepted_idx
+            .checked_sub(1)
+            .and_then(|idx| self.log_hashes.get(idx).copied())
+    }
+
+    fn fast_quorum_size(cluster_size: usize) -> usize {
+        let non_leader_nodes = cluster_size.saturating_sub(1);
+        1 + ((3 * non_leader_nodes + 3) / 4)
+    }
+
+    fn append_metadata(&mut self, meta: DomMetadata) {
+        self.generate_log_hash(&meta);
+        self.metadata_log.push(meta);
+        self.log_hashes.push(self.last_log_hash);
     }
 
     fn generate_log_hash(&mut self, prop_val: &DomMetadata) {
