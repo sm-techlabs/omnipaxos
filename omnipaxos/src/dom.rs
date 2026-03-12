@@ -1,4 +1,4 @@
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 // use crate because not binary target (some languages make imports very difficult)
 use crate::messages::sequence_paxos::{AcceptDecide, FastReply, FastSync};
 use crate::simulated_clock::ClockState;
@@ -13,11 +13,15 @@ pub struct DomMetadata {
 }
 
 /// Used to track what quorums have been reached for a given request
-pub struct QuorumData {
-    fast_response: u64,
-    slow_response: u64,
+pub struct QuorumData<T> 
+where 
+    T: Entry
+{
+    fast_response: HashSet<u64>,
+    slow_response: HashSet<u64>,
     leader_response: bool,
     hash_value: u64,
+    unhandled_replies: Vec<FastReply<T>>,
 }
 
 fn calculate_hash<T: Hash>(t: &T) -> u64 {
@@ -42,8 +46,8 @@ where
     last_released_timestamp: i64,
     /// hash value
     pub last_log_hash: u64,
-    fast_reply_tracker: HashMap<(u64, u64), QuorumData>,
-    fast_quorum_size: u64,
+    fast_reply_tracker: HashMap<(u64, u64), QuorumData<T>>,
+    fast_quorum_size: usize,
     metadata_log: Vec<DomMetadata>
 }
 
@@ -52,7 +56,7 @@ where
     T: Entry
 {
     /// Returns a new DOM
-    pub fn new(fqs: u64) -> DOM<T> {
+    pub fn new(fqs: usize) -> DOM<T> {
         return DOM {
             early_buffer: BinaryHeap::new(),
             late_buffer: HashMap::new(),
@@ -76,24 +80,55 @@ where
 
     /// Handles a fast path reply
     /// Returns true when the number of messages meets or exceeds fast quorum size reqs
-    pub fn handle_fast_reply(&mut self, fr: &FastReply<T>) -> bool {
-        // hash value must match to know the proposed value is stored in a correct replica
-        if fr.hash != self.last_log_hash {
-            return false
-        }
+    pub fn handle_fast_reply(&mut self, fr: FastReply<T>, leader: bool) -> bool {
         let key = (0, fr.request_id);
         let qd = self.fast_reply_tracker
             .entry(key)
-            .or_insert(QuorumData { fast_response: 1, slow_response: 0, leader_response: false, hash_value: 0 });
-        // let num_replies = self.fast_reply_tracker
-        //     .entry((fr.replica_id, fr.request_id))
-        //     .and_modify(|count| *count += 1)
-        //     .or_insert(1);
-        if qd.fast_response >= self.fast_quorum_size {
-            return true;
+            .or_insert(QuorumData { 
+                fast_response: HashSet::new(), 
+                slow_response: HashSet::new(), 
+                leader_response: false, 
+                hash_value: 0, 
+                unhandled_replies: Vec::new(),
+            });
+        if leader {
+            qd.fast_response.insert(fr.replica_id);
+            qd.leader_response = true;
+            qd.hash_value = fr.hash;
+        } else {
+            qd.unhandled_replies.push(fr);
+        }
+        if qd.leader_response {
+            while let Some(fr) = qd.unhandled_replies.pop() {
+                if fr.hash == qd.hash_value {
+                    qd.fast_response.insert(fr.replica_id);
+                }
+            }
+            if qd.fast_response.len() + qd.slow_response.len() >= self.fast_quorum_size {
+                return true;
+            } else {
+                return false;
+            }
+            
         } else {
             return false;
         }
+    }
+
+    /// Fake function to integrate slow responses for testing the 
+    /// fast reply handler
+    pub fn fake_increment_slow_replies(&mut self, pid: u64, request_id: u64) {
+        let key = (0, request_id);
+        let qd = self.fast_reply_tracker
+            .entry(key)
+            .or_insert(QuorumData { 
+                fast_response: HashSet::new(), 
+                slow_response: HashSet::new(), 
+                leader_response: false, 
+                hash_value: 0, 
+                unhandled_replies: Vec::new(),
+            });
+        qd.slow_response.insert(pid);
     }
 
     /// Handles a fast sync message 

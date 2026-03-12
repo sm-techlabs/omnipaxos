@@ -16,6 +16,7 @@ use crate::{
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn, Logger};
 use std::{collections::HashMap, fmt::Debug, vec};
+use rand::Rng;
 
 pub mod follower;
 pub mod leader;
@@ -267,9 +268,11 @@ where
     }
 
     fn handle_fast_reply(&mut self, fr: FastReply<T>) {
-        let decided = self.dom.handle_fast_reply(&fr);
+        let key = (self.pid, fr.request_id);
+        let sender_id = fr.replica_id;
+        // Viv - I am not sure if this equality works to detect leader; but I think it should
+        let decided = self.dom.handle_fast_reply(fr, sender_id == self.get_current_leader());
         if decided {
-            let key = (self.pid, fr.replica_id);
             let replied = self.inflight_proposals.entry(key).or_insert(false);
             if !*replied {
                 *replied = true;
@@ -277,9 +280,9 @@ where
                 #[cfg(feature = "logging")]
                 info!(
                     self.logger,
-                    "Fast Path Accepted Value {:?}", (fr.replica_id, fr.request_id), 
+                    "Fast Path Accepted Value {:?}", key, 
                 );
-                // reply to client here
+                // reply to client here -- maybe; in omnipaxos_kv, the server checks the decided log peridocially and responds based on that
             }
         }
     }
@@ -304,6 +307,8 @@ where
             match self.dom.release_message() {
                 None => return,
                 Some(prop_msg) => {
+                    // append to log but I think this is not a decide - Pavlos/Sam pls confirm
+                    self.internal_storage.append_entries_and_get_accepted_idx(prop_msg.entries).expect(WRITE_ERROR_MSG);
                     // hash is updated if message is released
                     let hash = self.dom.last_log_hash;
                     let fr: FastReply<T>= FastReply {
@@ -319,6 +324,17 @@ where
                         msg: PaxosMsg::FastReply(fr),
                     });
                     self.outgoing.push(to_send);
+                    // send accept here - Sam please double check sequencing
+                    // also need to add the hash value
+                    let am: Accepted = Accepted{
+                        n: prop_msg.n,
+                        accepted_idx: self.internal_storage.get_accepted_idx(),
+                    };
+                    self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                        from: self.pid,
+                        to: self.get_current_leader(),
+                        msg: PaxosMsg::Accepted(am),
+                    }));
                 }
             }
         }
@@ -421,11 +437,48 @@ where
     }
 
     fn propose_entry(&mut self, entry: T) {
-        match self.state {
-            (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
-            (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
-            _ => self.forward_proposals(vec![entry]),
-        }
+        // in nezha, we just always broadcast an AcceptDecide to everyone
+        // generating a random request id because I don't know where to get it
+        let mut rng = rand::thread_rng();
+        let req_id: u64 = rng.gen(); 
+        // data for the accept decide - this is how leader does it, but note that it updates internal storage so I don't think we should do this
+        // let accepted_metadata = self
+        //     .internal_storage
+        //     .append_entry_with_batching(entry)
+        //     .expect(WRITE_ERROR_MSG);
+        // let Some(meta) = accepted_metadata else {
+        //     return;
+        // };
+        let acc = AcceptDecide {
+                n: self.leader_state.n_leader,
+                seq_num: self.leader_state.next_seq_num(self.pid),
+                decided_idx: self.internal_storage.get_decided_idx(), // I guess we don't used decidedIndex in Nezha
+                entries: vec![entry],
+                id: (self.pid, req_id),
+                deadline: self.dom.get_deadline(),
+            };
+        // send to all peers
+        for peer_ref in &self.peers {
+            let pid = *peer_ref;
+            self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                from: self.pid,
+                to: pid,
+                msg: PaxosMsg::FastPropose(acc.clone()),
+            })); 
+        } 
+        // and send to self
+        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+            from: self.pid,
+            to: self.pid,
+            msg: PaxosMsg::FastPropose(acc),
+        }));
+
+        // this is the original code
+        // match self.state {
+        //     (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
+        //     (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
+        //     _ => self.forward_proposals(vec![entry]),
+        // }
     }
 
     pub(crate) fn get_leader_state(&self) -> &LeaderState<T> {
