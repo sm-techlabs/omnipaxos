@@ -378,46 +378,49 @@ where
             entries,
             ..
         } = prop_msg;
-        let accepted_idx = self
+        let accepted_metadata = self
             .internal_storage
-            .append_entries_without_batching(entries)
+            .append_entries_with_batching(entries)
             .expect(WRITE_ERROR_MSG);
-        self.leader_state.set_accepted_idx(self.pid, accepted_idx);
+        if let Some(metadata) = accepted_metadata {
+            let accepted_idx = metadata.accepted_idx;
+            self.leader_state.set_accepted_idx(self.pid, accepted_idx);
 
-        let hash = self
-            .dom
-            .record_accepted_metadata(id, deadline, accepted_idx);
-        let fast_reply = FastReply {
-            n: self.leader_state.n_leader,
-            coordinator_id: id.0,
-            request_id: id.1,
-            replica_id: self.pid,
-            accepted_idx: Some(accepted_idx),
-            result: None,
-            hash,
-        };
-        #[cfg(feature = "logging")]
-        info!(
-            self.logger,
-            "[INFO][FAST_PATH] leader appended coordinator={} request={} accepted_idx={} hash={}",
-            id.0,
-            id.1,
-            accepted_idx,
-            hash,
-        );
-        self.dispatch_fast_reply(fast_reply);
+            let hash = self
+                .dom
+                .record_accepted_metadata(id, deadline, accepted_idx);
+            let fast_reply = FastReply {
+                n: self.leader_state.n_leader,
+                coordinator_id: id.0,
+                request_id: id.1,
+                replica_id: self.pid,
+                accepted_idx: Some(accepted_idx),
+                result: None,
+                hash,
+            };
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[INFO][FAST_PATH] leader appended coordinator={} request={} accepted_idx={} hash={}",
+                id.0,
+                id.1,
+                accepted_idx,
+                hash,
+            );
+            self.dispatch_fast_reply(fast_reply);
 
-        let fast_accepted = FastAccepted {
-            n: self.leader_state.n_leader,
-            coordinator_id: id.0,
-            request_id: id.1,
-            accepted_idx,
-            hash,
-        };
-        if self.dom.handle_fast_accepted(fast_accepted, self.pid)
-            && accepted_idx > self.internal_storage.get_decided_idx()
-        {
-            self.fast_decide(accepted_idx, hash);
+            let fast_accepted = FastAccepted {
+                n: self.leader_state.n_leader,
+                coordinator_id: id.0,
+                request_id: id.1,
+                accepted_idx,
+                hash,
+            };
+            if self.dom.handle_fast_accepted(fast_accepted, self.pid)
+                && accepted_idx > self.internal_storage.get_decided_idx()
+            {
+                self.fast_decide(accepted_idx, hash);
+            }
         }
     }
 
