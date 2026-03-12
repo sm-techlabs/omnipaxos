@@ -115,6 +115,12 @@ where
         }
     }
 
+    /// Fake function to integrate slow responses for testing the 
+    /// fast reply handler
+    pub fn fake_increment_slow_replies(pid: u64) {
+
+    }
+
     /// Handles a fast sync message 
     /// Compares the value at log_id to the metadata in the sync message
     /// returns true if all good

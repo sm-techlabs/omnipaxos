@@ -321,6 +321,17 @@ where
                         msg: PaxosMsg::FastReply(fr),
                     });
                     self.outgoing.push(to_send);
+                    // send accept here - Sam please double check sequencing
+                    // also need to add the hash value
+                    let am: Accepted = Accepted{
+                        n: prop_msg.n,
+                        accepted_idx: self.internal_storage.get_accepted_idx(),
+                    };
+                    self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                        from: self.pid,
+                        to: self.leader_state.n_leader.pid,
+                        msg: PaxosMsg::Accepted(am),
+                    }));
                 }
             }
         }
