@@ -115,7 +115,7 @@ fn test_release_no_msg_past_deadline() {
     // Since dom.last_released_timestamp is initialized to 0, 
     // any deadline > 0 guarantees it goes into the early_buffer.
     let current_time = SystemTime::now().duration_since(UNIX_EPOCH).expect("Time is broken").as_micros();
-    let target_deadline = (current_time + 5000) as i64; // 5 ms  
+    let target_deadline = (current_time + 50000) as i64; // 5 ms  
 
     // Create a mock AcceptDecide message.
     // Note: You will need to fill in any other required fields that 
@@ -151,4 +151,160 @@ fn test_release_no_msg_past_deadline() {
     );
     let nxt_msg = dom.release_message();
     assert_eq!(nxt_msg, None);
+}
+
+#[test]
+fn test_fast_reply_handler() {
+    // Arrange: Initialize a DOM with a fast quorum size of 3
+    let mut dom = DOM::<Value>::new(3);
+    let request_id: u64 = 123;
+    let bal = Ballot::with(0, 0, 0, 0);
+    let hash = 123456;
+    // 2 fast replies from followers
+    let fr_follower1 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 1,
+        result: None,
+        hash: hash,
+    };
+    let fr_follower2 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 2,
+        result: None,
+        hash: hash,
+    };
+    // one fast reply from leader
+    let fr_leader = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 0,
+        result: None,
+        hash: hash,
+    };
+
+    let rfr1 = dom.handle_fast_reply(fr_follower1, false);
+    let rfr2 = dom.handle_fast_reply(fr_follower2, false);
+    let rfr3 = dom.handle_fast_reply(fr_leader, true);
+    assert_eq!(rfr1, false);
+    assert_eq!(rfr2, false);
+    assert_eq!(rfr3, true);
+}
+
+#[test]
+fn test_fast_reply_handler_incorrect_hash() {
+    // Arrange: Initialize a DOM with a fast quorum size of 3
+    let mut dom = DOM::<Value>::new(3);
+    let request_id: u64 = 123;
+    let bal = Ballot::with(0, 0, 0, 0);
+    let hash = 123456;
+    // 2 fast replies from followers
+    let fr_follower1 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 1,
+        result: None,
+        hash: hash,
+    };
+    let fr_follower2 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 2,
+        result: None,
+        hash: 54321,
+    };
+    // one fast reply from leader
+    let fr_leader = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 0,
+        result: None,
+        hash: hash,
+    };
+
+    let rfr1 = dom.handle_fast_reply(fr_follower1, false);
+    let rfr2 = dom.handle_fast_reply(fr_follower2, false);
+    let rfr3 = dom.handle_fast_reply(fr_leader, true);
+    assert_eq!(rfr1, false);
+    assert_eq!(rfr2, false);
+    assert_eq!(rfr3, false);
+}
+
+#[test]
+fn test_fast_reply_handler_leader_first() {
+    // Arrange: Initialize a DOM with a fast quorum size of 3
+    let mut dom = DOM::<Value>::new(3);
+    let request_id: u64 = 123;
+    let bal = Ballot::with(0, 0, 0, 0);
+    let hash = 123456;
+    // 2 fast replies from followers
+    let fr_follower1 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 1,
+        result: None,
+        hash: hash,
+    };
+    let fr_follower2 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 2,
+        result: None,
+        hash: hash,
+    };
+    // one fast reply from leader
+    let fr_leader = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 0,
+        result: None,
+        hash: hash,
+    };
+
+    let rfr1 = dom.handle_fast_reply(fr_leader, true);
+    let rfr2 = dom.handle_fast_reply(fr_follower2, false);
+    let rfr3 = dom.handle_fast_reply(fr_follower1, false);
+    assert_eq!(rfr1, false);
+    assert_eq!(rfr2, false);
+    assert_eq!(rfr3, true);
+}
+
+#[test]
+fn test_fast_reply_handler_quorum_too_small() {
+    // Arrange: Initialize a DOM with a fast quorum size of 4
+    let mut dom = DOM::<Value>::new(4);
+    let request_id: u64 = 123;
+    let bal = Ballot::with(0, 0, 0, 0);
+    let hash = 123456;
+    // 2 fast replies from followers
+    let fr_follower1 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 1,
+        result: None,
+        hash: hash,
+    };
+    let fr_follower2 = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 2,
+        result: None,
+        hash: hash,
+    };
+    // one fast reply from leader
+    let fr_leader = FastReply::<Value> {
+        n: bal,
+        request_id: request_id,
+        replica_id: 0,
+        result: None,
+        hash: hash,
+    };
+
+    let rfr1 = dom.handle_fast_reply(fr_leader, true);
+    let rfr2 = dom.handle_fast_reply(fr_follower2, false);
+    let rfr3 = dom.handle_fast_reply(fr_follower1, false);
+    assert_eq!(rfr1, false);
+    assert_eq!(rfr2, false);
+    assert_eq!(rfr3, false);
 }

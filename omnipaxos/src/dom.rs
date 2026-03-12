@@ -13,11 +13,15 @@ pub struct DomMetadata {
 }
 
 /// Used to track what quorums have been reached for a given request
-pub struct QuorumData {
+pub struct QuorumData<T> 
+where 
+    T: Entry
+{
     fast_response: u64,
     slow_response: u64,
     leader_response: bool,
     hash_value: u64,
+    unhandled_replies: Vec<FastReply<T>>,
 }
 
 fn calculate_hash<T: Hash>(t: &T) -> u64 {
@@ -42,7 +46,7 @@ where
     last_released_timestamp: i64,
     /// hash value
     pub last_log_hash: u64,
-    fast_reply_tracker: HashMap<(u64, u64), QuorumData>,
+    fast_reply_tracker: HashMap<(u64, u64), QuorumData<T>>,
     fast_quorum_size: u64,
     metadata_log: Vec<DomMetadata>
 }
@@ -76,21 +80,36 @@ where
 
     /// Handles a fast path reply
     /// Returns true when the number of messages meets or exceeds fast quorum size reqs
-    pub fn handle_fast_reply(&mut self, fr: &FastReply<T>) -> bool {
-        // hash value must match to know the proposed value is stored in a correct replica
-        if fr.hash != self.last_log_hash {
-            return false
-        }
+    pub fn handle_fast_reply(&mut self, fr: FastReply<T>, leader: bool) -> bool {
         let key = (0, fr.request_id);
         let qd = self.fast_reply_tracker
             .entry(key)
-            .or_insert(QuorumData { fast_response: 1, slow_response: 0, leader_response: false, hash_value: 0 });
-        // let num_replies = self.fast_reply_tracker
-        //     .entry((fr.replica_id, fr.request_id))
-        //     .and_modify(|count| *count += 1)
-        //     .or_insert(1);
-        if qd.fast_response >= self.fast_quorum_size {
-            return true;
+            .or_insert(QuorumData { 
+                fast_response: 0, 
+                slow_response: 0, 
+                leader_response: false, 
+                hash_value: 0, 
+                unhandled_replies: Vec::new(),
+            });
+        if leader {
+            qd.fast_response += 1;
+            qd.leader_response = true;
+            qd.hash_value = fr.hash;
+        } else {
+            qd.unhandled_replies.push(fr);
+        }
+        if qd.leader_response {
+            while let Some(fr) = qd.unhandled_replies.pop() {
+                if fr.hash == qd.hash_value {
+                    qd.fast_response += 1;
+                }
+            }
+            if qd.fast_response + qd.slow_response >= self.fast_quorum_size {
+                return true;
+            } else {
+                return false;
+            }
+            
         } else {
             return false;
         }

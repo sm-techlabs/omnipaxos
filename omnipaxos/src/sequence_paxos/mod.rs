@@ -267,9 +267,11 @@ where
     }
 
     fn handle_fast_reply(&mut self, fr: FastReply<T>) {
-        let decided = self.dom.handle_fast_reply(&fr);
+        let key = (self.pid, fr.request_id);
+        let sender_id = fr.replica_id;
+        // Viv - I am not sure if this equality works to detect leader; but I think it should
+        let decided = self.dom.handle_fast_reply(fr, sender_id == self.leader_state.n_leader.pid);
         if decided {
-            let key = (self.pid, fr.replica_id);
             let replied = self.inflight_proposals.entry(key).or_insert(false);
             if !*replied {
                 *replied = true;
@@ -277,7 +279,7 @@ where
                 #[cfg(feature = "logging")]
                 info!(
                     self.logger,
-                    "Fast Path Accepted Value {:?}", (fr.replica_id, fr.request_id), 
+                    "Fast Path Accepted Value {:?}", key, 
                 );
                 // reply to client here
             }
