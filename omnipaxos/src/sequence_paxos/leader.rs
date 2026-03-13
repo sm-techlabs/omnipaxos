@@ -244,12 +244,13 @@ where
             true => self.leader_state.get_seq_num(to),
             false => self.leader_state.next_seq_num(to),
         };
+        // hash=0 signals a slow-path Decide; followers skip the DOM hash check for these.
+        // Only fast_decide carries the real DOM hash for integrity verification.
         let d = Decide {
             n: self.leader_state.n_leader,
             seq_num,
             decided_idx,
-            // maybe we need the decided log hash here
-            hash: self.dom.last_log_hash,
+            hash: 0,
         };
         self.outgoing.push(Message::SequencePaxos(PaxosMessage {
             from: self.pid,
@@ -490,14 +491,110 @@ where
                         }
                     }
                 }
-                // Resend Prepare
+                // Resend Prepare to any followers that haven't yet promised this term.
                 let preparable_peers = self.leader_state.get_preparable_peers(&self.peers);
                 for peer in preparable_peers {
                     self.send_prepare(peer);
                 }
+                // Fast-path stall recovery: if there are log entries accepted by the leader
+                // but not yet decided (fast path quorum was not met), fall back to the slow path.
+                // By the time this resend fires, followers that received the FastPropose and
+                // processed it via the DOM buffer will have sent FastAccepted and their
+                // leader_state accepted_idx will be current. Only followers that are still
+                // missing entries (network issue or delayed DOM release) receive AcceptDecide.
+                let decided_idx = self.internal_storage.get_decided_idx();
+                let accepted_idx = self.internal_storage.get_accepted_idx();
+                if accepted_idx > decided_idx {
+                    if self.leader_state.is_chosen(accepted_idx) {
+                        // Quorum already acknowledged the entry but fast_decide was not called
+                        // (e.g., DOM quorum tracking lagged). Decide now via slow path.
+                        #[cfg(feature = "logging")]
+                        info!(
+                            self.logger,
+                            "[SLOW_PATH][DECIDE] quorum met on resend; deciding accepted_idx={}",
+                            accepted_idx,
+                        );
+                        self.internal_storage
+                            .set_decided_idx(accepted_idx)
+                            .expect(WRITE_ERROR_MSG);
+                        let peers = self.peers.clone();
+                        for pid in peers {
+                            self.send_decide(pid, accepted_idx, false);
+                        }
+                    } else {
+                        // Quorum not yet met. Send AcceptDecide to every promised follower
+                        // that is still behind, so they can enter the slow path.
+                        #[cfg(feature = "logging")]
+                        info!(
+                            self.logger,
+                            "[SLOW_PATH] fast-path stall; decided_idx={} accepted_idx={}; \
+                             sending AcceptDecide to lagging followers",
+                            decided_idx,
+                            accepted_idx,
+                        );
+                    }
+                    // In both cases, push missing log entries to any promised follower
+                    // that has not yet acknowledged them.  This ensures followers that
+                    // missed fast-path entries receive them and that the leader's
+                    // per-follower seq_num counter is advanced, so any follower that is
+                    // still unreachable will see a gap in the next AcceptDecide it
+                    // receives and trigger Phase 1 recovery.
+                    let lagging: Vec<NodeId> = self
+                        .leader_state
+                        .get_promised_followers()
+                        .into_iter()
+                        .filter(|pid| {
+                            self.leader_state.get_accepted_idx(*pid) < accepted_idx
+                        })
+                        .collect();
+                    for pid in lagging {
+                        self.send_fallback_acceptdecide(pid);
+                    }
+                }
             }
             Phase::Recover => (),
             Phase::None => (),
+        }
+    }
+
+    /// Sends an AcceptDecide to `to` covering all log entries from the follower's last known
+    /// accepted index up to the leader's current accepted index.  Used as a slow-path fallback
+    /// when a fast-path entry has not been acknowledged by this follower.
+    #[cfg(not(feature = "unicache"))]
+    fn send_fallback_acceptdecide(&mut self, to: NodeId) {
+        let follower_accepted = self.leader_state.get_accepted_idx(to);
+        let leader_accepted = self.internal_storage.get_accepted_idx();
+        if follower_accepted >= leader_accepted {
+            return;
+        }
+        match self.internal_storage.get_suffix(follower_accepted) {
+            Ok(entries) if !entries.is_empty() => {
+                let decided_idx = self.internal_storage.get_decided_idx();
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[SEND][SLOW_PATH] AcceptDecide fallback to={} \
+                     from_idx={} entries={} decided_idx={}",
+                    to,
+                    follower_accepted,
+                    entries.len(),
+                    decided_idx,
+                );
+                let acc = AcceptDecide {
+                    n: self.leader_state.n_leader,
+                    seq_num: self.leader_state.next_seq_num(to),
+                    decided_idx,
+                    entries,
+                    id: (0, 0),
+                    deadline: self.dom.get_deadline(),
+                };
+                self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                    from: self.pid,
+                    to,
+                    msg: PaxosMsg::AcceptDecide(acc),
+                }));
+            }
+            _ => {}
         }
     }
 

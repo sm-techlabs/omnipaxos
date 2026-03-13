@@ -273,9 +273,12 @@ where
             .dom
             .handle_fast_reply(fr, sender_id == self.get_current_leader());
         if let Some(decision) = decided {
-            let replied = self.inflight_proposals.entry(key).or_insert(false);
-            if !*replied {
-                *replied = true;
+            let already_replied = self.inflight_proposals.get(&key).copied().unwrap_or(false);
+            if !already_replied {
+                // Super quorum of FastReply messages reached: the coordinator
+                // advances decided_idx locally here (fast-path 1-RTT client reply).
+                // The leader will subsequently broadcast Decide to all nodes.
+                self.inflight_proposals.remove(&key);
                 if decision.accepted_idx > self.internal_storage.get_decided_idx() {
                     self.internal_storage
                         .set_decided_idx(decision.accepted_idx)
@@ -285,13 +288,12 @@ where
                 #[cfg(feature = "logging")]
                 info!(
                     self.logger,
-                    "[INFO][FAST_PATH] coordinator={} request={} accepted_idx={} hash={}",
+                    "[INFO][FAST_PATH][DECIDE] coordinator={} request={} accepted_idx={} hash={}",
                     decision.coordinator_id,
                     decision.request_id,
                     decision.accepted_idx,
                     decision.hash,
                 );
-                // reply to client here -- maybe; in omnipaxos_kv, the server checks the decided log peridocially and responds based on that
             }
         }
     }
@@ -337,28 +339,30 @@ where
         }
     }
 
-    /// We need a way to call this, basically KV will need another timer that calls this tick function
-    /// used to release messages
+    /// Drains all entries from the DOM early buffer whose deadline has passed.
+    /// Called on every OmniPaxos tick to advance the fast-path state machine.
     pub fn tick(&mut self) {
-        match self.dom.release_message() {
-            None => return,
-            Some(prop_msg) => {
-                #[cfg(feature = "logging")]
-                info!(
-                    self.logger,
-                    "[INFO][FAST_PATH] releasing request={} coordinator={} deadline={}",
-                    prop_msg.id.1,
-                    prop_msg.id.0,
-                    prop_msg.deadline,
-                );
+        while let Some(prop_msg) = self.dom.release_message() {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[INFO][FAST_PATH][BUFFER] releasing request={} coordinator={} deadline={}",
+                prop_msg.id.1,
+                prop_msg.id.0,
+                prop_msg.deadline,
+            );
 
-                if self.state == (Role::Leader, Phase::Accept) {
-                    self.handle_released_fast_entry_leader(prop_msg);
-                } else {
-                    let fast_reply = self.handle_released_fast_entry_follower(prop_msg);
-                    self.dispatch_fast_reply(fast_reply);
-                }
+            if self.state == (Role::Leader, Phase::Accept) {
+                self.handle_released_fast_entry_leader(prop_msg);
+            } else if self.state == (Role::Follower, Phase::Accept) {
+                // Only process fast-path entries when we are in a stable accept state.
+                // Entries released while in Prepare/Recover are discarded; recovery via
+                // AcceptSync will bring the log up to date.
+                let fast_reply = self.handle_released_fast_entry_follower(prop_msg);
+                self.dispatch_fast_reply(fast_reply);
             }
+            // else: drop the entry — the node is in Prepare or Recover phase and will
+            // receive correct entries from the leader via AcceptSync.
         }
     }
 

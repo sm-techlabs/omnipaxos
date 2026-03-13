@@ -150,12 +150,15 @@ where
             && self.handle_sequence_num(dec.seq_num, dec.n.pid) == MessageStatus::Expected
         {
             // Validate that our log matches the leader's at the decided index.
-            // If hashes don't match, our log is stale and we need to resync with the leader.
-            if dec.hash != self.dom.last_log_hash {
+            // hash == 0 means this is a slow-path Decide; no DOM hash verification needed.
+            // hash != 0 means this is a fast-path Decide; if hashes don't match our
+            // DOM log metadata is inconsistent with the leader's and we must resync.
+            if dec.hash != 0 && dec.hash != self.dom.last_log_hash {
                 #[cfg(feature = "logging")]
                 warn!(
                     self.logger,
-                    "Decide hash mismatch at decided_idx {}. leader_hash: {}, our_hash: {}. Reconnecting for resync.",
+                    "[SLOW_PATH] Decide hash mismatch at decided_idx={}. \
+                     leader_hash={} our_hash={}. Initiating reconciliation.",
                     dec.decided_idx,
                     dec.hash,
                     self.dom.last_log_hash
