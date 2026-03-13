@@ -187,6 +187,7 @@ fn setup_follower() -> (
                 sync_idx: 0,
                 stopsign: None,
             },
+            dom_hash: 0,
             #[cfg(feature = "unicache")]
             unicache: <Value as Entry>::UniCache::new(),
         }),
@@ -244,6 +245,7 @@ fn atomic_storage_acceptsync_test() {
                     sync_idx: 0,
                     stopsign: None,
                 },
+                dom_hash: 0,
                 #[cfg(feature = "unicache")]
                 unicache: <Value as Entry>::UniCache::new(),
             }),

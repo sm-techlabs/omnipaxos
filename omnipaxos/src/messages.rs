@@ -75,6 +75,8 @@ pub mod sequence_paxos {
         /// The log update which the follower applies to its log in order to sync
         /// with the leader.
         pub log_sync: LogSync<T>,
+        /// C3: leader's DOM hash at the time of sync, so the follower can pass Decide hash checks
+        pub dom_hash: u64,
         #[cfg(feature = "unicache")]
         /// The UniCache of the leader
         pub unicache: T::UniCache,

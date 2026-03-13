@@ -327,13 +327,28 @@ where
         }
     }
 
-    /// Viv - I am lazy but we need to handle the case where the sync is received before the value is released to the log
-    /// probably need to store the sync message in that case
+    /// Handles a FastSync message from the leader.
+    /// If the follower is out of sync and a late-buffer entry can repair it, applies
+    /// the recovered entry to the log (C4).
     fn handle_fast_sync(&mut self, fs: FastSync) {
-        let (in_sync, _) = self.dom.handle_fast_sync(&fs);
-        if !in_sync {
+        let (in_sync, recovered) = self.dom.handle_fast_sync(&fs);
+        if in_sync {
+            return;
+        }
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[INFO][SLOW_PATH] out of sync for log_index={}", fs.log_index,
+        );
+        // C4: apply the late-buffer entry if DOM recovered one
+        if let Some(entry) = recovered {
             #[cfg(feature = "logging")]
-            info!(self.logger, "Out of sync for log index {:?}", fs.log_index);
+            info!(
+                self.logger,
+                "[INFO][SLOW_PATH] applying recovered late-buffer entry for request={} at log_index={}",
+                entry.id.1, fs.log_index,
+            );
+            self.handle_acceptdecide(entry, false);
         }
     }
 

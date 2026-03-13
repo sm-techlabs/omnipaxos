@@ -53,6 +53,8 @@ where
     pub(crate) fn handle_acceptsync(&mut self, accsync: AcceptSync<T>, from: NodeId) {
         if self.check_valid_ballot(accsync.n) && self.state == (Role::Follower, Phase::Prepare) {
             self.cached_promise_message = None;
+            // C3: sync DOM hash so subsequent Decide hash checks pass after log resync
+            self.dom.last_log_hash = accsync.dom_hash;
             let new_accepted_idx = self
                 .internal_storage
                 .sync_log(accsync.n, accsync.decided_idx, Some(accsync.log_sync))
@@ -226,7 +228,7 @@ where
             coordinator_id,
             request_id,
             replica_id: self.pid,
-            accepted_idx: None,
+            accepted_idx: Some(accepted_idx),
             result: None,
             hash,
         }

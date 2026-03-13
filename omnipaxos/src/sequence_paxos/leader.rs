@@ -179,6 +179,8 @@ where
             seq_num: self.leader_state.next_seq_num(to),
             decided_idx: self.get_decided_idx(),
             log_sync,
+            // C3: propagate leader DOM hash so the follower can pass subsequent Decide hash checks
+            dom_hash: self.dom.last_log_hash,
             #[cfg(feature = "unicache")]
             unicache: self.internal_storage.get_unicache(),
         };
@@ -477,6 +479,23 @@ where
                 }
             }
             Phase::Accept => {
+                // C2: Slow-path fallback for stuck fast-path entries.
+                // Triggered on the resend timeout. If accepted entries above decided_idx
+                // have already reached a normal majority quorum (tracked via FastAccepted
+                // messages in leader_state.accepted_indexes), decide them now rather than
+                // waiting forever for a super-quorum that may never be reached.
+                let accepted_idx = self.internal_storage.get_accepted_idx();
+                let decided_idx = self.internal_storage.get_decided_idx();
+                if accepted_idx > decided_idx && self.leader_state.is_chosen(accepted_idx) {
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "[INFO][SLOW_PATH] resend timeout: normal quorum met for accepted_idx={} — deciding via slow path",
+                        accepted_idx,
+                    );
+                    self.fast_decide(accepted_idx, self.dom.last_log_hash);
+                }
+
                 // Resend AcceptStopSign or StopSign's decide
                 if let Some(ss) = self.internal_storage.get_stopsign() {
                     let decided_idx = self.internal_storage.get_decided_idx();
