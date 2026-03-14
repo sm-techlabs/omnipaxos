@@ -644,6 +644,12 @@ where
         }
     }
 
+    /// Returns the current cumulative DOM log hash.  Useful in tests to verify
+    /// that two nodes have applied the same fast-path metadata sequence.
+    pub(crate) fn get_dom_hash(&self) -> u64 {
+        self.dom.last_log_hash
+    }
+
     /// Updates the shared `state_label` so the logger prefix reflects the
     /// current `(Role, Phase)` on the next log line.
     #[cfg(feature = "logging")]

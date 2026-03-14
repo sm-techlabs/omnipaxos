@@ -289,6 +289,13 @@ where
         self.seq_paxos.get_promise()
     }
 
+    /// Returns the current cumulative DOM log hash for this node.
+    /// Used in tests to verify that nodes have applied the same fast-path
+    /// metadata sequence and to observe hash divergence after slow-path accepts.
+    pub fn get_dom_hash(&self) -> u64 {
+        self.seq_paxos.get_dom_hash()
+    }
+
     /// Moves outgoing messages from this server into the buffer. The messages should then be sent via the network implementation.
     pub fn take_outgoing_messages(&mut self, buffer: &mut Vec<Message<T>>) {
         self.seq_paxos.take_outgoing_msgs(buffer);

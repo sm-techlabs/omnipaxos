@@ -88,6 +88,36 @@ fn inject_fast_propose(sys: &TestSystem, from: NodeId, proposal: AcceptDecide<Va
     }
 }
 
+/// Like `inject_fast_propose` but skips `exclude`.
+fn inject_fast_propose_except(
+    sys: &TestSystem,
+    from: NodeId,
+    proposal: AcceptDecide<Value>,
+    exclude: NodeId,
+) {
+    for pid in 1..=sys.nodes.len() as NodeId {
+        if pid == exclude {
+            continue;
+        }
+        let msg = Message::SequencePaxos(PaxosMessage {
+            from,
+            to: pid,
+            msg: PaxosMsg::FastPropose(proposal.clone()),
+        });
+        sys.nodes
+            .get(&pid)
+            .unwrap()
+            .on_definition(|x| x.paxos.handle_incoming(msg.clone()));
+    }
+}
+
+fn get_dom_hash(sys: &TestSystem, pid: NodeId) -> u64 {
+    sys.nodes
+        .get(&pid)
+        .unwrap()
+        .on_definition(|x| x.paxos.get_dom_hash())
+}
+
 const SEP: &str = "══════════════════════════════════════════════════════════════════════";
 
 fn test_begin(name: &str) {
@@ -453,7 +483,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
     inject_fast_propose(&sys, 2, first);
     inject_fast_propose(&sys, 3, second);
 
-    let expected = vec![Value::with_id(20), Value::with_id(30)];
+    let expected = vec![Value::with_id(30), Value::with_id(20)];
     for pid in 1..=cfg.num_nodes as NodeId {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
@@ -740,5 +770,262 @@ fn happy_path_slow_path() {
 
     print_final_logs(&sys, "happy_path_slow_path");
     test_end("happy_path_slow_path");
+    shutdown(sys);
+}
+
+/// Test — N=7, 3 coordinators, one follower misses one coordinator's FastPropose.
+///
+/// With N=7 the fast quorum is 6.  The proposals are staged so isolated never
+/// has a chance to accept an entry at the wrong log position:
+///
+///   Step 1 — c1 injects T1 to 6 nodes (not isolated).
+///             6 out of 7 FastAccepted = fast quorum → T1 fast-decides.
+///             The Decide for T1 arrives at isolated (leader→isolated is open).
+///             isolated's accepted_idx=0 < decided_idx=1 → recovery.
+///             AcceptSync sends [T1] from sync_idx=0 → isolated decides T1. ✓
+///
+///   Step 2 — After isolated has decided T1, c2 and c3 inject T2 and T3 to
+///             all 7 nodes with strictly increasing deadlines.  All 7 nodes
+///             are in Accept phase and accept each entry at the correct index.
+///
+/// Expected outcome: all 7 nodes decide [T1, T2, T3] in deadline order.
+#[test]
+#[serial]
+fn seven_nodes_isolated_from_one_coordinator_converges() {
+    test_begin("seven_nodes_isolated_from_one_coordinator_converges");
+    let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
+    let sys = TestSystem::with(cfg);
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+    let ballot = sys
+        .nodes
+        .get(&leader)
+        .unwrap()
+        .on_definition(|x| x.paxos.get_promise());
+
+    let mut non_leaders: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&p| p != leader)
+        .collect();
+    let c1 = non_leaders.remove(0);
+    let c2 = non_leaders.remove(0);
+    let c3 = non_leaders.remove(0);
+    let isolated = non_leaders.remove(0);
+
+    // ── Step 1: c1 proposes T1 to 6 nodes only ───────────────────────────────
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time is broken")
+        .as_micros() as i64;
+
+    let p_c1 = AcceptDecide {
+        n: ballot,
+        seq_num: SequenceNumber::default(),
+        decided_idx: 0,
+        entries: vec![Value::with_id(3100)],
+        deadline: now + 50_000,
+        id: (c1 as u64, 3100),
+    };
+    // 6 out of 7 nodes receive c1's FastPropose → fast quorum (6) met.
+    inject_fast_propose_except(&sys, c1, p_c1, isolated);
+
+    // Wait for isolated to detect the gap and recover.
+    // The Decide for T1 arrives at isolated from the leader (leader→isolated is
+    // never blocked).  decided_idx=1 > accepted_idx=0 → reconnected() →
+    // AcceptSync sends [T1] → isolated decides T1.
+    wait_until(cfg.wait_timeout, || {
+        sys.nodes
+            .get(&isolated)
+            .unwrap()
+            .on_definition(|x| x.paxos.get_decided_idx() >= 1)
+    });
+
+    // ── Step 2: c2 and c3 propose T2 and T3 to all 7 nodes ───────────────────
+    // Now that isolated has T1 at idx=0, it can accept T2 and T3 at idx=1 and 2.
+    let now2 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time is broken")
+        .as_micros() as i64;
+
+    let p_c2 = AcceptDecide {
+        n: ballot,
+        seq_num: SequenceNumber::default(),
+        decided_idx: 1, // T1 is already decided
+        entries: vec![Value::with_id(3101)],
+        deadline: now2 + 50_000,
+        id: (c2 as u64, 3101),
+    };
+    let p_c3 = AcceptDecide {
+        n: ballot,
+        seq_num: SequenceNumber::default(),
+        decided_idx: 1,
+        entries: vec![Value::with_id(3102)],
+        deadline: now2 + 100_000,
+        id: (c3 as u64, 3102),
+    };
+    inject_fast_propose(&sys, c2, p_c2);
+    inject_fast_propose(&sys, c3, p_c3);
+
+    // All 7 nodes must converge to the same three entries in deadline order.
+    let expected = vec![
+        Value::with_id(3100),
+        Value::with_id(3101),
+        Value::with_id(3102),
+    ];
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
+    }
+
+    print_final_logs(&sys, "seven_nodes_isolated_from_one_coordinator_converges");
+    test_end("seven_nodes_isolated_from_one_coordinator_converges");
+    shutdown(sys);
+}
+
+/// Test — Termination when the leader receives fewer FastAccepted than the super quorum.
+///
+/// With N=7 and fast_quorum=6, blocking two followers from receiving the
+/// coordinator's FastPropose means only 5 FastAccepted reach the leader.
+/// The fast path cannot complete.
+///
+/// The resend timer must detect the stall and fall back to the slow path:
+/// regular quorum (4/7) is satisfied by the 5 nodes that did accept, so the
+/// leader decides via AcceptDecide, then pushes fallback AcceptDecide messages
+/// to the two blocked followers.
+///
+/// This test verifies the algorithm always terminates — it never hangs waiting
+/// for a fast quorum that can no longer be reached.
+#[test]
+#[serial]
+fn termination_when_below_fast_quorum() {
+    test_begin("termination_when_below_fast_quorum");
+    let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
+    let sys = TestSystem::with(cfg);
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+
+    // Need two followers that are NOT the leader so we can block exactly 2
+    // nodes from receiving the FastPropose.
+    let mut non_leaders: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&p| p != leader)
+        .collect();
+    let coordinator = non_leaders.remove(0);
+    let blocked1 = non_leaders.remove(0);
+    let blocked2 = non_leaders.remove(0);
+
+    let value = Value::with_id(3200);
+
+    // Block coordinator → blocked1 and coordinator → blocked2 so those two
+    // nodes never receive the FastPropose.  5 remaining nodes (including the
+    // leader) will send FastAccepted → 5 < fast_quorum=6 → fast path stalls.
+    sys.nodes.get(&coordinator).unwrap().on_definition(|x| {
+        x.set_connection(blocked1, false);
+        x.set_connection(blocked2, false);
+    });
+
+    coordinator_append(&sys, coordinator, value.clone());
+
+    // The resend timer fires (regular quorum 4/7 is met by the 5 nodes that
+    // accepted) → slow-path decide → fallback AcceptDecide to blocked1 and
+    // blocked2 via the leader.  All 7 nodes must eventually decide.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
+    }
+
+    print_final_logs(&sys, "termination_when_below_fast_quorum");
+    test_end("termination_when_below_fast_quorum");
+    shutdown(sys);
+}
+
+/// Test — DOM hash diverges after a slow-path decision when one node missed
+/// the fast-path window.
+///
+/// Scenario (N=3, fast_quorum=3):
+///   - coordinator proposes entry T
+///   - leader and coordinator fast-accept T → their `dom.last_log_hash` is
+///     updated via `record_accepted_metadata`
+///   - isolated never received the FastPropose → doesn't fast-accept T
+///   - Only 2 FastAccepted reach the leader (< fast_quorum=3) → slow-path
+///     fallback: Decide(hash=0) + fallback AcceptDecide to isolated
+///   - isolated receives T via slow-path AcceptDecide → appends T but does
+///     NOT update its DOM hash (no `record_accepted_metadata` call)
+///
+/// After T is decided by all three nodes:
+///   - leader.dom_hash  = H(T_metadata)  [non-zero, fast-accepted]
+///   - coordinator.dom_hash = H(T_metadata)  [same]
+///   - isolated.dom_hash = 0             [never fast-accepted]
+///
+/// This documents the known hash-divergence bug: two nodes can hold the same
+/// log content yet report different DOM hashes after a mixed fast/slow-path
+/// round.  The follow-on fix (piggybacking dom_hash on AcceptSync) is tracked
+/// separately; this test provides a regression baseline.
+#[test]
+#[serial]
+fn dom_hash_diverges_after_slow_path_decision() {
+    test_begin("dom_hash_diverges_after_slow_path_decision");
+    let cfg = dom_default_testcfg(Some(3)); // N=3, fast_quorum=3 (ALL nodes)
+    let sys = TestSystem::with(cfg);
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+    let coordinator = (1..=cfg.num_nodes as NodeId)
+        .find(|&p| p != leader)
+        .expect("coordinator");
+    let isolated = (1..=cfg.num_nodes as NodeId)
+        .find(|&p| p != leader && p != coordinator)
+        .expect("isolated");
+
+    let value = Value::with_id(3300);
+
+    // Block coordinator → isolated so isolated never receives the FastPropose.
+    // With fast_quorum=3 (all nodes), only 2 FA reach the leader →
+    // fast path cannot complete → resend timer triggers slow-path fallback.
+    sys.nodes
+        .get(&coordinator)
+        .unwrap()
+        .on_definition(|x| x.set_connection(isolated, false));
+
+    coordinator_append(&sys, coordinator, value.clone());
+
+    // Wait for all three nodes to decide T via the slow path.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
+    }
+
+    // Capture hashes after the slow-path round.
+    let leader_hash = get_dom_hash(&sys, leader);
+    let coordinator_hash = get_dom_hash(&sys, coordinator);
+    let isolated_hash = get_dom_hash(&sys, isolated);
+
+    eprintln!(
+        "  leader({leader})      dom_hash = {leader_hash:#018x}\n  \
+         coordinator({coordinator}) dom_hash = {coordinator_hash:#018x}\n  \
+         isolated({isolated})    dom_hash = {isolated_hash:#018x}"
+    );
+
+    // Leader and coordinator both fast-accepted T — their hashes must agree.
+    assert_eq!(
+        leader_hash, coordinator_hash,
+        "leader and coordinator both fast-accepted T; their hashes must match"
+    );
+
+    // Isolated only slow-path accepted T — its hash was not updated.
+    // NOTE: this `assert_ne!` documents the known bug.  Once the
+    // AcceptSync dom_hash propagation fix is in place and the slow-path
+    // AcceptDecide also updates the hash, this assertion should be
+    // replaced with `assert_eq!`.
+    assert_ne!(
+        leader_hash, isolated_hash,
+        "isolated slow-path accepted T; its hash must differ from the \
+         leader's (documents the hash-divergence bug)"
+    );
+    assert_eq!(
+        isolated_hash, 0,
+        "isolated's hash must still be the initial value (0) because \
+         slow-path AcceptDecide does not call record_accepted_metadata"
+    );
+
+    print_final_logs(&sys, "dom_hash_diverges_after_slow_path_decision");
+    test_end("dom_hash_diverges_after_slow_path_decision");
     shutdown(sys);
 }

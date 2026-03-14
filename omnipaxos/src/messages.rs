@@ -139,7 +139,7 @@ pub mod sequence_paxos {
                 .deadline
                 .cmp(&self.deadline)
                 // Tie-breaker: use ID if deadlines are equal
-                .then_with(|| other.id.cmp(&self.id))
+                .then_with(|| self.id.cmp(&other.id))
         }
     }
 
