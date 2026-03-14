@@ -16,3 +16,4 @@ docs/.DS_Store
 ACTION_PLAN.md
 CLAUDE.md
 .claude/
+.cargo/config.toml
