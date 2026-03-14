@@ -537,6 +537,7 @@ where
             entries: vec![entry],
             id: request_key,
             deadline: self.dom.get_deadline(),
+            dom_hash: 0, // fast-path: receivers compute the hash themselves via reply_fast_accepted
         };
         #[cfg(feature = "logging")]
         info!(

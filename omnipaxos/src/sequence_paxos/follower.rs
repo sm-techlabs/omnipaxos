@@ -89,6 +89,7 @@ where
                 accsync.seq_num,
             );
             self.current_seq_num = accsync.seq_num;
+            self.dom.last_log_hash = accsync.dom_hash;
             let cached_idx = self.outgoing.len();
             self.latest_accepted_meta = Some((accsync.n, cached_idx));
             self.outgoing.push(Message::SequencePaxos(PaxosMessage {
@@ -149,6 +150,7 @@ where
             }
             let deadline = acc_dec.deadline;
             let id = acc_dec.id;
+            let dom_hash = acc_dec.dom_hash;
 
             #[cfg(not(feature = "unicache"))]
             let entries = acc_dec.entries;
@@ -174,6 +176,9 @@ where
                 if is_from_early_buffer {
                     self.reply_fast_accepted(idx, deadline, id);
                 } else {
+                    // Slow-path: adopt the leader's DOM hash so our hash stays
+                    // consistent with nodes that accepted the same entries via fast path.
+                    self.dom.last_log_hash = dom_hash;
                     self.reply_accepted(n, idx);
                 }
             }

@@ -470,6 +470,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
         entries: vec![Value::with_id(20)],
         deadline: shared_deadline,
         id: (2, 200),
+        dom_hash: 0,
     };
     let second = AcceptDecide {
         n: ballot,
@@ -478,6 +479,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
         entries: vec![Value::with_id(30)],
         deadline: shared_deadline,
         id: (3, 300),
+        dom_hash: 0,
     };
 
     inject_fast_propose(&sys, 2, first);
@@ -530,6 +532,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         entries: vec![Value::with_id(10)],
         deadline: now + 50_000,
         id: (2, 1000),
+        dom_hash: 0,
     };
     let proposal_b = AcceptDecide {
         n: ballot,
@@ -538,6 +541,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         entries: vec![Value::with_id(20)],
         deadline: now + 100_000,
         id: (3, 2000),
+        dom_hash: 0,
     };
     let proposal_c = AcceptDecide {
         n: ballot,
@@ -546,6 +550,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         entries: vec![Value::with_id(30)],
         deadline: now + 150_000,
         id: (4, 3000),
+        dom_hash: 0,
     };
 
     // Broadcast all three proposals to every node simultaneously.
@@ -825,6 +830,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
         entries: vec![Value::with_id(3100)],
         deadline: now + 50_000,
         id: (c1 as u64, 3100),
+        dom_hash: 0,
     };
     // 6 out of 7 nodes receive c1's FastPropose → fast quorum (6) met.
     inject_fast_propose_except(&sys, c1, p_c1, isolated);
@@ -854,6 +860,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
         entries: vec![Value::with_id(3101)],
         deadline: now2 + 50_000,
         id: (c2 as u64, 3101),
+        dom_hash: 0,
     };
     let p_c3 = AcceptDecide {
         n: ballot,
@@ -862,6 +869,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
         entries: vec![Value::with_id(3102)],
         deadline: now2 + 100_000,
         id: (c3 as u64, 3102),
+        dom_hash: 0,
     };
     inject_fast_propose(&sys, c2, p_c2);
     inject_fast_propose(&sys, c3, p_c3);
@@ -947,18 +955,16 @@ fn termination_when_below_fast_quorum() {
 ///   - isolated never received the FastPropose → doesn't fast-accept T
 ///   - Only 2 FastAccepted reach the leader (< fast_quorum=3) → slow-path
 ///     fallback: Decide(hash=0) + fallback AcceptDecide to isolated
-///   - isolated receives T via slow-path AcceptDecide → appends T but does
-///     NOT update its DOM hash (no `record_accepted_metadata` call)
+///   - isolated receives T via slow-path AcceptDecide (fallback from `resend_messages_leader`)
+///     → appends T and adopts the leader's dom_hash from the AcceptDecide message
 ///
-/// After T is decided by all three nodes:
-///   - leader.dom_hash  = H(T_metadata)  [non-zero, fast-accepted]
+/// After T is decided by all three nodes, all hashes must agree:
+///   - leader.dom_hash      = H(T_metadata)  [fast-accepted]
 ///   - coordinator.dom_hash = H(T_metadata)  [same]
-///   - isolated.dom_hash = 0             [never fast-accepted]
+///   - isolated.dom_hash    = H(T_metadata)  [adopted from slow-path AcceptDecide]
 ///
-/// This documents the known hash-divergence bug: two nodes can hold the same
-/// log content yet report different DOM hashes after a mixed fast/slow-path
-/// round.  The follow-on fix (piggybacking dom_hash on AcceptSync) is tracked
-/// separately; this test provides a regression baseline.
+/// This verifies the fix: `dom_hash` is piggy-backed on AcceptDecide and AcceptSync
+/// so slow-path recipients end up with the same hash as fast-path acceptors.
 #[test]
 #[serial]
 fn dom_hash_diverges_after_slow_path_decision() {
@@ -1009,20 +1015,12 @@ fn dom_hash_diverges_after_slow_path_decision() {
         "leader and coordinator both fast-accepted T; their hashes must match"
     );
 
-    // Isolated only slow-path accepted T — its hash was not updated.
-    // NOTE: this `assert_ne!` documents the known bug.  Once the
-    // AcceptSync dom_hash propagation fix is in place and the slow-path
-    // AcceptDecide also updates the hash, this assertion should be
-    // replaced with `assert_eq!`.
-    assert_ne!(
-        leader_hash, isolated_hash,
-        "isolated slow-path accepted T; its hash must differ from the \
-         leader's (documents the hash-divergence bug)"
-    );
+    // Isolated received T via slow-path AcceptDecide which now carries
+    // dom_hash.  After adopting it, all three nodes must agree.
     assert_eq!(
-        isolated_hash, 0,
-        "isolated's hash must still be the initial value (0) because \
-         slow-path AcceptDecide does not call record_accepted_metadata"
+        leader_hash, isolated_hash,
+        "isolated slow-path accepted T; after adopting dom_hash from \
+         AcceptDecide it must match the leader's hash"
     );
 
     print_final_logs(&sys, "dom_hash_diverges_after_slow_path_decision");

@@ -215,6 +215,7 @@ where
                             // update so the entry has the new deadline
                             let updated_log_entry = AcceptDecide {
                                 deadline: fs.deadline,
+                                dom_hash: 0, // fast-path sync: receiver computes hash
                                 ..missed_log_entry
                             };
                             return (false, Some(updated_log_entry));

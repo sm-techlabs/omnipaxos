@@ -36,6 +36,7 @@ fn test_handle_fast_propose_adds_to_early_buffer() {
             Value::with_id(6),
         ],
         n: Ballot::with(0, 0, 0, 0),
+        dom_hash: 0,
     };
 
     // Act: Handle the proposal
@@ -78,6 +79,7 @@ fn test_handle_fast_propose_adds_to_late_buffer() {
             Value::with_id(6),
         ],
         n: Ballot::with(0, 0, 0, 0),
+        dom_hash: 0,
     };
     let b_message = AcceptDecide {
         id: (1, 1),
@@ -96,6 +98,7 @@ fn test_handle_fast_propose_adds_to_late_buffer() {
             Value::with_id(6),
         ],
         n: Ballot::with(0, 0, 0, 0),
+        dom_hash: 0,
     };
 
     // Act: Handle the proposal
@@ -138,6 +141,7 @@ fn test_release_no_msg_past_deadline() {
             Value::with_id(6),
         ],
         n: Ballot::with(0, 0, 0, 0),
+        dom_hash: 0,
     };
 
     // Act: Handle the proposal
@@ -412,6 +416,7 @@ fn test_hash_functions() {
             Value::with_id(6),
         ],
         n: Ballot::with(0, 0, 0, 0),
+        dom_hash: 0,
     };
     let ac_message2 = AcceptDecide {
         id: (1, 1),
@@ -430,6 +435,7 @@ fn test_hash_functions() {
             Value::with_id(6),
         ],
         n: Ballot::with(0, 0, 0, 0),
+        dom_hash: 0,
     };
     let ac_message3 = AcceptDecide {
         id: (1, 1),
@@ -448,6 +454,7 @@ fn test_hash_functions() {
             Value::with_id(6),
         ],
         n: Ballot::with(0, 0, 0, 0),
+        dom_hash: 0,
     };
 
     let ac_message3b = AcceptDecide {
@@ -467,6 +474,7 @@ fn test_hash_functions() {
             Value::with_id(6),
         ],
         n: Ballot::with(0, 0, 0, 0),
+        dom_hash: 0,
     };
     // Act: Handle the proposal
     dom.handle_fast_propose(ac_message.clone());

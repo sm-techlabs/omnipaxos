@@ -75,6 +75,10 @@ pub mod sequence_paxos {
         /// The log update which the follower applies to its log in order to sync
         /// with the leader.
         pub log_sync: LogSync<T>,
+        /// The leader's cumulative DOM log hash after the sync.  The follower must
+        /// adopt this value so its hash stays consistent with nodes that applied
+        /// the same entries via the fast path.
+        pub dom_hash: u64,
         #[cfg(feature = "unicache")]
         /// The UniCache of the leader
         pub unicache: T::UniCache,
@@ -103,6 +107,11 @@ pub mod sequence_paxos {
         pub deadline: i64,
         /// id is coordinator_id then request_id, used to find in the late buffer
         pub id: (u64, u64),
+        /// The leader's cumulative DOM log hash after appending these entries.
+        /// Followers that accept via the slow path adopt this value so their hash
+        /// stays consistent with nodes that applied the same entries via the fast path.
+        /// Set to 0 for FastPropose messages (fast-path followers compute the hash themselves).
+        pub dom_hash: u64,
     }
     /// Thanks Gemini
     /// These let us use AcceptDecide with the BinaryHeap

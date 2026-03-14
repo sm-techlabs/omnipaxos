@@ -199,6 +199,7 @@ where
             seq_num: self.leader_state.next_seq_num(to),
             decided_idx: self.get_decided_idx(),
             log_sync,
+            dom_hash: self.dom.last_log_hash,
             #[cfg(feature = "unicache")]
             unicache: self.internal_storage.get_unicache(),
         };
@@ -242,6 +243,7 @@ where
                         entries: accepted.entries.clone(),
                         id: (0, 0),
                         deadline: self.dom.get_deadline(),
+                        dom_hash: self.dom.last_log_hash,
                     };
                     #[cfg(feature = "logging")]
                     let (acc_entries_len, acc_decided_idx, acc_seq_num) =
@@ -282,18 +284,16 @@ where
         }));
     }
 
-    pub(crate) fn send_decide(&mut self, to: NodeId, decided_idx: usize, resend: bool) {
+    pub(crate) fn send_decide(&mut self, to: NodeId, decided_idx: usize, resend: bool, hash: u64) {
         let seq_num = match resend {
             true => self.leader_state.get_seq_num(to),
             false => self.leader_state.next_seq_num(to),
         };
-        // hash=0 signals a slow-path Decide; followers skip the DOM hash check for these.
-        // Only fast_decide carries the real DOM hash for integrity verification.
         let d = Decide {
             n: self.leader_state.n_leader,
             seq_num,
             decided_idx,
-            hash: 0,
+            hash,
         };
         self.outgoing.push(Message::SequencePaxos(PaxosMessage {
             from: self.pid,
@@ -306,7 +306,7 @@ where
             "[SEND][DECIDE] to={} decided_idx={} hash={} resend={}",
             to,
             decided_idx,
-            0_u64,
+            hash,
             resend,
         );
     }
@@ -410,7 +410,7 @@ where
                     let latest_accdec = self.get_latest_accdec_message(pid);
                     match latest_accdec {
                         Some(accdec) => accdec.decided_idx = decided_idx,
-                        None => self.send_decide(pid, decided_idx, false),
+                        None => self.send_decide(pid, decided_idx, false, self.dom.last_log_hash),
                     }
                 }
             }
@@ -493,7 +493,7 @@ where
         }
     }
 
-    fn fast_decide(&mut self, decided_idx: usize, _hash: u64) {
+    fn fast_decide(&mut self, decided_idx: usize, hash: u64) {
         if decided_idx <= self.internal_storage.get_decided_idx() {
             return;
         }
@@ -504,11 +504,11 @@ where
         #[cfg(feature = "logging")]
         info!(
             self.logger,
-            "[INFO][FAST_DECIDE] decided_idx={} hash={} broadcasting Decide", decided_idx, _hash,
+            "[INFO][FAST_DECIDE] decided_idx={} hash={} broadcasting Decide", decided_idx, hash,
         );
         let peers = self.peers.clone();
         for pid in peers {
-            self.send_decide(pid, decided_idx, false);
+            self.send_decide(pid, decided_idx, false, hash);
         }
     }
 
@@ -551,7 +551,7 @@ where
                     let decided_idx = self.internal_storage.get_decided_idx();
                     for follower in self.leader_state.get_promised_followers() {
                         if self.internal_storage.stopsign_is_decided() {
-                            self.send_decide(follower, decided_idx, true);
+                            self.send_decide(follower, decided_idx, true, self.dom.last_log_hash);
                         } else if self.leader_state.get_accepted_idx(follower)
                             != self.internal_storage.get_accepted_idx()
                         {
@@ -587,7 +587,7 @@ where
                             .expect(WRITE_ERROR_MSG);
                         let peers = self.peers.clone();
                         for pid in peers {
-                            self.send_decide(pid, accepted_idx, false);
+                            self.send_decide(pid, accepted_idx, false, self.dom.last_log_hash);
                         }
                     } else {
                         // Quorum not yet met. Send AcceptDecide to every promised follower
@@ -655,6 +655,7 @@ where
                     entries,
                     id: (0, 0),
                     deadline: self.dom.get_deadline(),
+                    dom_hash: self.dom.last_log_hash,
                 };
                 self.outgoing.push(Message::SequencePaxos(PaxosMessage {
                     from: self.pid,

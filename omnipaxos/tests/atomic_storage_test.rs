@@ -187,6 +187,7 @@ fn setup_follower() -> (
                 sync_idx: 0,
                 stopsign: None,
             },
+            dom_hash: 0,
             #[cfg(feature = "unicache")]
             unicache: <Value as Entry>::UniCache::new(),
         }),
@@ -244,6 +245,7 @@ fn atomic_storage_acceptsync_test() {
                     sync_idx: 0,
                     stopsign: None,
                 },
+                dom_hash: 0,
                 #[cfg(feature = "unicache")]
                 unicache: <Value as Entry>::UniCache::new(),
             }),
@@ -293,6 +295,7 @@ fn atomic_storage_trim_test() {
                 ],
                 deadline: 0,
                 id: (0, 0),
+                dom_hash: 0,
             }),
         });
         op.handle_incoming(setup_msg);
@@ -359,6 +362,7 @@ fn atomic_storage_snapshot_test() {
                 ],
                 deadline: 0,
                 id: (0, 0),
+                dom_hash: 0,
             }),
         });
         op.handle_incoming(setup_msg);
@@ -439,6 +443,7 @@ fn atomic_storage_accept_decide_test() {
                 ],
                 deadline: 0,
                 id: (0, 0),
+                dom_hash: 0,
             }),
         });
         let _res = catch_unwind(AssertUnwindSafe(|| op.handle_incoming(msg.clone())));
