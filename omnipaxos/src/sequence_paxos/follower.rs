@@ -126,6 +126,27 @@ where
             // Capture fields before entries are moved
             let n = acc_dec.n;
             let decided_idx = acc_dec.decided_idx;
+
+            // Fast-path entries bypass the seq_num ordering check, so we must
+            // explicitly guard against accepting an entry at the wrong log
+            // position.  If our accepted_idx is behind the decided_idx carried
+            // in the message, we have missed entries that were already decided
+            // and must recover before appending anything.
+            if is_from_early_buffer
+                && self.internal_storage.get_accepted_idx() < decided_idx
+            {
+                #[cfg(feature = "logging")]
+                warn!(
+                    self.logger,
+                    "[FAST_PATH] stale log: accepted_idx={} < decided_idx={} coordinator={} \
+                     → discarding fast-path entry and triggering recovery",
+                    self.internal_storage.get_accepted_idx(),
+                    decided_idx,
+                    n.pid,
+                );
+                self.reconnected(n.pid);
+                return;
+            }
             let deadline = acc_dec.deadline;
             let id = acc_dec.id;
 
