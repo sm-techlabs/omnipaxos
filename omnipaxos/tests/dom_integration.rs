@@ -52,9 +52,12 @@ fn read_decided_values(sys: &TestSystem, pid: NodeId) -> Vec<Value> {
             .read_decided_suffix(0)
             .unwrap_or_default()
             .into_iter()
-            .map(|entry| match entry {
-                LogEntry::Decided(value) => value,
-                other => panic!("Unexpected log entry: {:?}", other),
+            .flat_map(|entry| match entry {
+                LogEntry::Decided(value) => vec![value],
+                LogEntry::Snapshotted(snapshot) => snapshot.snapshot.snapshotted,
+                LogEntry::Undecided(_) | LogEntry::Trimmed(_) | LogEntry::StopSign(_, _) => {
+                    Vec::new()
+                }
             })
             .collect()
     })
@@ -99,11 +102,66 @@ fn test_end(name: &str) {
     eprintln!("\x1b[36m{SEP}\x1b[0m\n");
 }
 
+fn print_final_logs(sys: &TestSystem, test_name: &str) {
+    eprintln!("\x1b[35m┌─ Final logs for {test_name}\x1b[0m");
+
+    let mut pids: Vec<NodeId> = sys.nodes.keys().copied().collect();
+    pids.sort_unstable();
+
+    for pid in pids {
+        let (decided_idx, entries) = sys.nodes.get(&pid).unwrap().on_definition(|x| {
+            let decided_idx = x.paxos.get_decided_idx();
+            let entries = x.paxos.read_entries(0..decided_idx).unwrap_or_default();
+            (decided_idx, entries)
+        });
+
+        eprintln!(
+            "\x1b[35m├─ Node {pid}  (decided_idx={decided_idx}, entries={})\x1b[0m",
+            entries.len()
+        );
+
+        if entries.is_empty() {
+            eprintln!("│   (empty)");
+            continue;
+        }
+
+        for (idx, entry) in entries.iter().enumerate() {
+            match entry {
+                LogEntry::Decided(value) => eprintln!("│   [{idx:>2}] DECIDED    {value:?}"),
+                LogEntry::Undecided(value) => eprintln!("│   [{idx:>2}] UNDECIDED  {value:?}"),
+                LogEntry::Snapshotted(snapshot) => eprintln!(
+                    "│   [{idx:>2}] SNAPSHOT   trimmed_idx={} snapshot={:?}",
+                    snapshot.trimmed_idx, snapshot.snapshot
+                ),
+                LogEntry::StopSign(stopsign, is_decided) => eprintln!(
+                    "│   [{idx:>2}] STOPSIGN   decided={} {stopsign:?}",
+                    is_decided
+                ),
+                LogEntry::Trimmed(trimmed_idx) => {
+                    eprintln!("│   [{idx:>2}] TRIMMED    up_to={trimmed_idx}")
+                }
+            }
+        }
+    }
+
+    eprintln!("\x1b[35m└─ End final logs\x1b[0m");
+}
+
+fn dom_default_testcfg(num_nodes: Option<usize>) -> TestConfig {
+    let num_nodes = num_nodes.unwrap_or(7);
+    TestConfig {
+        num_nodes,
+        num_threads: num_nodes,
+        wait_timeout: Duration::from_millis(10_000),
+        ..TestConfig::default()
+    }
+}
+
 #[test]
 #[serial]
 fn fast_path_coordinator_decides_before_cluster_wide_decide() {
     test_begin("fast_path_coordinator_decides_before_cluster_wide_decide");
-    let cfg = TestConfig::default();
+    let cfg = dom_default_testcfg(None);
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -157,6 +215,7 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
+    print_final_logs(&sys, "fast_path_coordinator_decides_before_cluster_wide_decide");
     test_end("fast_path_coordinator_decides_before_cluster_wide_decide");
     shutdown(sys);
 }
@@ -173,7 +232,7 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
 #[serial]
 fn partial_fast_quorum_falls_back_to_slow_path() {
     test_begin("partial_fast_quorum_falls_back_to_slow_path");
-    let cfg = TestConfig::default();
+    let cfg = dom_default_testcfg(None);
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -229,6 +288,7 @@ fn partial_fast_quorum_falls_back_to_slow_path() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
+    print_final_logs(&sys, "partial_fast_quorum_falls_back_to_slow_path");
     test_end("partial_fast_quorum_falls_back_to_slow_path");
     shutdown(sys);
 }
@@ -244,8 +304,7 @@ fn partial_fast_quorum_falls_back_to_slow_path() {
 #[serial]
 fn coordinator_crash_still_decides() {
     test_begin("coordinator_crash_still_decides");
-    let mut cfg = TestConfig::default();
-    cfg.num_nodes = 3;
+    let cfg = dom_default_testcfg(Some(3));
     let mut sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -274,6 +333,7 @@ fn coordinator_crash_still_decides() {
         wait_for_decided_values(&sys, pid, &[first_value.clone()], cfg.wait_timeout);
     }
 
+    print_final_logs(&sys, "coordinator_crash_still_decides");
     test_end("coordinator_crash_still_decides");
     shutdown(sys);
 }
@@ -291,7 +351,7 @@ fn coordinator_crash_still_decides() {
 #[serial]
 fn divergent_logs_reconcile_via_slow_path() {
     test_begin("divergent_logs_reconcile_via_slow_path");
-    let cfg = TestConfig::default();
+    let cfg = dom_default_testcfg(None);
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -349,6 +409,7 @@ fn divergent_logs_reconcile_via_slow_path() {
         });
     }
 
+    print_final_logs(&sys, "divergent_logs_reconcile_via_slow_path");
     test_end("divergent_logs_reconcile_via_slow_path");
     shutdown(sys);
 }
@@ -357,7 +418,7 @@ fn divergent_logs_reconcile_via_slow_path() {
 #[serial]
 fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
     test_begin("fast_path_same_deadline_tiebreaks_by_coordinator_pid");
-    let cfg = TestConfig::default();
+    let cfg = dom_default_testcfg(None);
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -397,6 +458,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
+    print_final_logs(&sys, "fast_path_same_deadline_tiebreaks_by_coordinator_pid");
     test_end("fast_path_same_deadline_tiebreaks_by_coordinator_pid");
     shutdown(sys);
 }
@@ -414,12 +476,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
 #[serial]
 fn seven_nodes_three_coordinators_deadline_ordering() {
     test_begin("seven_nodes_three_coordinators_deadline_ordering");
-    let cfg = TestConfig {
-        num_nodes: 7,
-        num_threads: 7,
-        wait_timeout: Duration::from_millis(10_000),
-        ..TestConfig::default()
-    };
+    let cfg = dom_default_testcfg(None);
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -473,6 +530,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
+    print_final_logs(&sys, "seven_nodes_three_coordinators_deadline_ordering");
     test_end("seven_nodes_three_coordinators_deadline_ordering");
     shutdown(sys);
 }
@@ -493,12 +551,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
 #[serial]
 fn seven_nodes_multiple_coordinators_straggler_recovers() {
     test_begin("seven_nodes_multiple_coordinators_straggler_recovers");
-    let cfg = TestConfig {
-        num_nodes: 7,
-        num_threads: 7,
-        wait_timeout: Duration::from_millis(10_000),
-        ..TestConfig::default()
-    };
+    let cfg = dom_default_testcfg(None);
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -570,6 +623,7 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
         });
     }
 
+    print_final_logs(&sys, "seven_nodes_multiple_coordinators_straggler_recovers");
     test_end("seven_nodes_multiple_coordinators_straggler_recovers");
     shutdown(sys);
 }
@@ -593,7 +647,7 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
 #[serial]
 fn happy_path_fast_path() {
     test_begin("happy_path_fast_path");
-    let cfg = TestConfig::default(); // 3 nodes, all connected
+    let cfg = dom_default_testcfg(Some(3)); // 3 nodes, all connected
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -624,6 +678,7 @@ fn happy_path_fast_path() {
         wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
     }
 
+    print_final_logs(&sys, "happy_path_fast_path");
     test_end("happy_path_fast_path");
     shutdown(sys);
 }
@@ -653,7 +708,7 @@ fn happy_path_fast_path() {
 #[serial]
 fn happy_path_slow_path() {
     test_begin("happy_path_slow_path");
-    let cfg = TestConfig::default(); // 3 nodes
+    let cfg = dom_default_testcfg(Some(3)); // 3 nodes
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -683,6 +738,7 @@ fn happy_path_slow_path() {
         wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
     }
 
+    print_final_logs(&sys, "happy_path_slow_path");
     test_end("happy_path_slow_path");
     shutdown(sys);
 }

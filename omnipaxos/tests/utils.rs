@@ -971,7 +971,7 @@ impl Snapshot<Value> for ValueSnapshot {
     }
 
     fn use_snapshots() -> bool {
-        true
+        false
     }
 }
 

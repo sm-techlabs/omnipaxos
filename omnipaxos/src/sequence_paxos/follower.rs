@@ -184,7 +184,8 @@ where
             // hash == 0 means this is a slow-path Decide; no DOM hash verification needed.
             // hash != 0 means this is a fast-path Decide; if hashes don't match our
             // DOM log metadata is inconsistent with the leader's and we must resync.
-            if dec.hash != 0 && dec.hash != self.dom.last_log_hash {
+            if  (dec.decided_idx > self.internal_storage.get_accepted_idx()) ||
+                (dec.hash != 0 && dec.hash != self.dom.last_log_hash) {
                 #[cfg(feature = "logging")]
                 warn!(
                     self.logger,
@@ -275,7 +276,7 @@ where
             coordinator_id,
             request_id,
             replica_id: self.pid,
-            accepted_idx: None,
+            accepted_idx: Some(accepted_idx),
             result: None,
             hash,
         }

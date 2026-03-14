@@ -367,6 +367,15 @@ where
                 // AcceptSync will bring the log up to date.
                 let fast_reply = self.handle_released_fast_entry_follower(prop_msg);
                 self.dispatch_fast_reply(fast_reply);
+            } else {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[INFO][FAST_PATH][BUFFER] discarding (not in Accept phase) request={} coordinator={} deadline={}",
+                    prop_msg.id.1,
+                    prop_msg.id.0,
+                    prop_msg.deadline,
+                );
             }
             // else: drop the entry — the node is in Prepare or Recover phase and will
             // receive correct entries from the leader via AcceptSync.
