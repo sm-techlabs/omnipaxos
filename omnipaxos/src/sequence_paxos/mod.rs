@@ -1,6 +1,6 @@
 use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*, util::LeaderState};
 #[cfg(feature = "logging")]
-use crate::utils::logger::create_logger;
+use crate::utils::logger::{create_logger, StateLabel};
 use crate::{
     dom::DOM,
     messages::Message,
@@ -43,6 +43,8 @@ where
     cached_promise_message: Option<Promise<T>>,
     #[cfg(feature = "logging")]
     logger: Logger,
+    #[cfg(feature = "logging")]
+    state_label: StateLabel,
     // DOM
     dom: DOM<T>,
     inflight_proposals: HashMap<(u64, u64), bool>,
@@ -85,6 +87,18 @@ where
         let internal_storage_config = InternalStorageConfig {
             batch_size: config.batch_size,
         };
+        #[cfg(feature = "logging")]
+        let (paxos_logger, paxos_state_label) = {
+            if let Some(logger) = config.custom_logger {
+                use std::sync::{Arc, Mutex};
+                (logger, Arc::new(Mutex::new("---/---".to_string())))
+            } else {
+                let s = config
+                    .logger_file_path
+                    .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
+                create_logger(s.as_str(), pid)
+            }
+        };
         let mut paxos = SequencePaxos {
             internal_storage: InternalStorage::with(
                 storage,
@@ -103,16 +117,9 @@ where
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
             #[cfg(feature = "logging")]
-            logger: {
-                if let Some(logger) = config.custom_logger {
-                    logger
-                } else {
-                    let s = config
-                        .logger_file_path
-                        .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
-                    create_logger(s.as_str())
-                }
-            },
+            logger: paxos_logger,
+            #[cfg(feature = "logging")]
+            state_label: paxos_state_label,
             dom: DOM::new(num_nodes),
             inflight_proposals: HashMap::new(),
         };
@@ -368,6 +375,27 @@ where
 
     /// Handle an incoming message.
     pub(crate) fn handle(&mut self, m: PaxosMessage<T>) {
+        #[cfg(feature = "logging")]
+        {
+            let msg_type = match &m.msg {
+                PaxosMsg::Prepare(_) => "Prepare",
+                PaxosMsg::PrepareReq(_) => "PrepareReq",
+                PaxosMsg::Promise(_) => "Promise",
+                PaxosMsg::AcceptSync(_) => "AcceptSync",
+                PaxosMsg::AcceptDecide(_) => "AcceptDecide",
+                PaxosMsg::Accepted(_) => "Accepted",
+                PaxosMsg::Decide(_) => "Decide",
+                PaxosMsg::FastPropose(_) => "FastPropose",
+                PaxosMsg::FastAccepted(_) => "FastAccepted",
+                PaxosMsg::FastReply(_) => "FastReply",
+                PaxosMsg::Sync(_) => "FastSync",
+                _ => "other",
+            };
+            info!(
+                self.logger,
+                "[RECV] {} from={}", msg_type, m.from
+            );
+        }
         match m.msg {
             PaxosMsg::PrepareReq(prepreq) => self.handle_preparereq(prepreq, m.from),
             PaxosMsg::Prepare(prep) => self.handle_prepare(prep, m.from),
@@ -450,10 +478,18 @@ where
     /// Handles re-establishing a connection to a previously disconnected peer.
     /// This should only be called if the underlying network implementation indicates that a connection has been re-established.
     pub(crate) fn reconnected(&mut self, pid: NodeId) {
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[RECOVER] gap detected from={} → entering Recover phase, sending PrepareReq",
+            pid
+        );
         if pid == self.pid {
             return;
         } else if pid == self.get_current_leader() {
             self.state = (Role::Follower, Phase::Recover);
+            #[cfg(feature = "logging")]
+            self.update_state_label();
         }
         let prepreq = PrepareReq {
             n: self.get_promise(),
@@ -501,6 +537,14 @@ where
             req_id,
             acc.deadline,
             self.get_current_leader(),
+        );
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[APPEND] fast_propose coordinator={} request={} deadline={}",
+            self.pid,
+            acc.id.1,
+            acc.deadline,
         );
         // send to all peers
         for peer_ref in &self.peers {
@@ -588,6 +632,25 @@ where
             suffix,
             sync_idx,
             stopsign: self.internal_storage.get_stopsign(),
+        }
+    }
+
+    /// Updates the shared `state_label` so the logger prefix reflects the
+    /// current `(Role, Phase)` on the next log line.
+    #[cfg(feature = "logging")]
+    pub(crate) fn update_state_label(&self) {
+        let label = match &self.state {
+            (Role::Leader, Phase::Prepare) => "Ldr/Pre",
+            (Role::Leader, Phase::Accept) => "Ldr/Acc",
+            (Role::Leader, Phase::Recover) => "Ldr/Rec",
+            (Role::Leader, Phase::None) => "Ldr/---",
+            (Role::Follower, Phase::Prepare) => "Fol/Pre",
+            (Role::Follower, Phase::Accept) => "Fol/Acc",
+            (Role::Follower, Phase::Recover) => "Fol/Rec",
+            (Role::Follower, Phase::None) => "Fol/---",
+        };
+        if let Ok(mut g) = self.state_label.lock() {
+            *g = label.to_string();
         }
     }
 }

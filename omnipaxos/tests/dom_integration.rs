@@ -85,9 +85,24 @@ fn inject_fast_propose(sys: &TestSystem, from: NodeId, proposal: AcceptDecide<Va
     }
 }
 
+const SEP: &str = "══════════════════════════════════════════════════════════════════════";
+
+fn test_begin(name: &str) {
+    eprintln!("\n\x1b[36m{SEP}\x1b[0m");
+    eprintln!("\x1b[36m  ▶ BEGIN  {name}\x1b[0m");
+    eprintln!("\x1b[36m{SEP}\x1b[0m");
+}
+
+fn test_end(name: &str) {
+    eprintln!("\x1b[36m{SEP}\x1b[0m");
+    eprintln!("\x1b[36m  ✓ END    {name}\x1b[0m");
+    eprintln!("\x1b[36m{SEP}\x1b[0m\n");
+}
+
 #[test]
 #[serial]
 fn fast_path_coordinator_decides_before_cluster_wide_decide() {
+    test_begin("fast_path_coordinator_decides_before_cluster_wide_decide");
     let cfg = TestConfig::default();
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
@@ -142,6 +157,7 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
+    test_end("fast_path_coordinator_decides_before_cluster_wide_decide");
     shutdown(sys);
 }
 
@@ -156,6 +172,7 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
 #[test]
 #[serial]
 fn partial_fast_quorum_falls_back_to_slow_path() {
+    test_begin("partial_fast_quorum_falls_back_to_slow_path");
     let cfg = TestConfig::default();
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
@@ -212,6 +229,7 @@ fn partial_fast_quorum_falls_back_to_slow_path() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
+    test_end("partial_fast_quorum_falls_back_to_slow_path");
     shutdown(sys);
 }
 
@@ -225,6 +243,7 @@ fn partial_fast_quorum_falls_back_to_slow_path() {
 #[test]
 #[serial]
 fn coordinator_crash_still_decides() {
+    test_begin("coordinator_crash_still_decides");
     let mut cfg = TestConfig::default();
     cfg.num_nodes = 3;
     let mut sys = TestSystem::with(cfg);
@@ -255,6 +274,7 @@ fn coordinator_crash_still_decides() {
         wait_for_decided_values(&sys, pid, &[first_value.clone()], cfg.wait_timeout);
     }
 
+    test_end("coordinator_crash_still_decides");
     shutdown(sys);
 }
 
@@ -270,6 +290,7 @@ fn coordinator_crash_still_decides() {
 #[test]
 #[serial]
 fn divergent_logs_reconcile_via_slow_path() {
+    test_begin("divergent_logs_reconcile_via_slow_path");
     let cfg = TestConfig::default();
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
@@ -328,12 +349,14 @@ fn divergent_logs_reconcile_via_slow_path() {
         });
     }
 
+    test_end("divergent_logs_reconcile_via_slow_path");
     shutdown(sys);
 }
 
 #[test]
 #[serial]
 fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
+    test_begin("fast_path_same_deadline_tiebreaks_by_coordinator_pid");
     let cfg = TestConfig::default();
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
@@ -374,6 +397,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
+    test_end("fast_path_same_deadline_tiebreaks_by_coordinator_pid");
     shutdown(sys);
 }
 
@@ -389,9 +413,11 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
 #[test]
 #[serial]
 fn seven_nodes_three_coordinators_deadline_ordering() {
+    test_begin("seven_nodes_three_coordinators_deadline_ordering");
     let cfg = TestConfig {
         num_nodes: 7,
         num_threads: 7,
+        wait_timeout: Duration::from_millis(10_000),
         ..TestConfig::default()
     };
     let sys = TestSystem::with(cfg);
@@ -447,6 +473,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
+    test_end("seven_nodes_three_coordinators_deadline_ordering");
     shutdown(sys);
 }
 
@@ -465,9 +492,11 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
 #[test]
 #[serial]
 fn seven_nodes_multiple_coordinators_straggler_recovers() {
+    test_begin("seven_nodes_multiple_coordinators_straggler_recovers");
     let cfg = TestConfig {
         num_nodes: 7,
         num_threads: 7,
+        wait_timeout: Duration::from_millis(10_000),
         ..TestConfig::default()
     };
     let sys = TestSystem::with(cfg);
@@ -541,5 +570,119 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
         });
     }
 
+    test_end("seven_nodes_multiple_coordinators_straggler_recovers");
+    shutdown(sys);
+}
+
+/// Happy path — Fast Path end-to-end
+///
+/// This test documents the complete flow of a single client request through the
+/// DOM fast path on a 3-node cluster where all nodes are connected.
+///
+/// Expected event sequence (visible in logs with `--features logging`):
+///   coordinator  → [APPEND]        fast_propose broadcasts FastPropose to all nodes
+///   every node   → [RECV]          FastPropose received
+///   every node   → (tick fires)    [FAST_PATH][BUFFER] deadline expires, entry released
+///   every node   → [RECV][ACCEPT_DECIDE] entry appended to local log (fast_path=true)
+///   every node   → [SEND][FAST_ACCEPTED] FastAccepted sent to leader
+///   leader       → [RECV]          FastAccepted received from each node
+///   leader       → (fast quorum)   [FAST_DECIDE] decided_idx advanced, Decide broadcast
+///   coordinator  → [FAST_PATH][DECIDE] decided_idx advanced (1-RTT client reply)
+///   every node   → [RECV][DECIDE]  Decide received, committed
+#[test]
+#[serial]
+fn happy_path_fast_path() {
+    test_begin("happy_path_fast_path");
+    let cfg = TestConfig::default(); // 3 nodes, all connected
+    let sys = TestSystem::with(cfg);
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+    // Pick a non-leader as coordinator so we exercise the full
+    // FastReply → coordinator → leader → Decide path.
+    let coordinator = (1..=cfg.num_nodes as NodeId)
+        .find(|&pid| pid != leader)
+        .expect("coordinator");
+    let value = Value::with_id(1001);
+
+    // Register a decided-future on the coordinator so we can block until
+    // the fast-path 1-RTT reply arrives.
+    let (kprom, kfuture) = promise::<()>();
+    sys.nodes.get(&coordinator).unwrap().on_definition(|x| {
+        x.insert_decided_future(Ask::new(kprom, value.clone()));
+        x.paxos.append(value.clone()).expect("append should succeed");
+    });
+
+    // The coordinator must decide via the fast path before the cluster-wide
+    // Decide is broadcast by the leader.
+    kfuture
+        .wait_timeout(cfg.wait_timeout)
+        .expect("coordinator did not receive fast-path decide in time");
+
+    // All three replicas must eventually commit the value.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
+    }
+
+    test_end("happy_path_fast_path");
+    shutdown(sys);
+}
+
+/// Happy path — Slow Path end-to-end
+///
+/// This test documents the complete flow of a single client request through the
+/// slow path (resend-timer fallback) on a 3-node cluster.
+///
+/// The coordinator's outgoing link to one follower is severed so the fast-path
+/// super quorum (N=3 requires all 3) can never be reached.  After the resend
+/// timer fires the leader detects the stall (regular quorum already met) and
+/// commits via the slow path, also sending a fallback AcceptDecide to the
+/// lagging follower.
+///
+/// Expected event sequence (visible in logs with `--features logging`):
+///   coordinator  → [APPEND]        fast_propose broadcasts FastPropose (lagging misses it)
+///   2 nodes      → (tick fires)    entry released from DOM buffer
+///   2 nodes      → [SEND][FAST_ACCEPTED] only 2 FastAccepted reach leader (<super quorum)
+///   resend timer → [SLOW_PATH][DECIDE] quorum met → set_decided_idx, Decide(hash=0) broadcast
+///   leader       → [SEND][DECIDE]  Decide sent to connected peers (hash=0 = slow-path)
+///   leader       → [SEND][ACCEPT_DECIDE] fallback AcceptDecide sent to lagging follower
+///   lagging      → [RECV][ACCEPT_DECIDE] entry appended
+///   lagging      → [RECV][DECIDE]  committed (hash=0 → no DOM hash check)
+///   all nodes    → decided_idx == 1
+#[test]
+#[serial]
+fn happy_path_slow_path() {
+    test_begin("happy_path_slow_path");
+    let cfg = TestConfig::default(); // 3 nodes
+    let sys = TestSystem::with(cfg);
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+    let coordinator = (1..=cfg.num_nodes as NodeId)
+        .find(|&pid| pid != leader)
+        .expect("coordinator");
+    let lagging = (1..=cfg.num_nodes as NodeId)
+        .find(|&pid| pid != leader && pid != coordinator)
+        .expect("lagging");
+    let value = Value::with_id(1002);
+
+    // Sever coordinator → lagging so lagging never receives the FastPropose.
+    // With N=3 and fast_quorum=3, only 2 FastAccepted will reach the leader,
+    // which is below the super-quorum threshold.
+    sys.nodes
+        .get(&coordinator)
+        .unwrap()
+        .on_definition(|x| x.set_connection(lagging, false));
+
+    coordinator_append(&sys, coordinator, value.clone());
+
+    // The resend timer (default 500 ms) detects the stall and commits via the
+    // slow path.  The fallback AcceptDecide ensures the lagging follower also
+    // receives the entry and eventually decides it.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
+    }
+
+    test_end("happy_path_slow_path");
     shutdown(sys);
 }

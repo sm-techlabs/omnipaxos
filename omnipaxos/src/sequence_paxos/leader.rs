@@ -20,6 +20,13 @@ where
         #[cfg(feature = "logging")]
         debug!(self.logger, "Newly elected leader: {:?}", n);
         if self.pid == n.pid {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[LEADER] elected ballot={:?} → entering Prepare phase, sending Prepare to {} peers",
+                n,
+                self.peers.len(),
+            );
             self.leader_state =
                 LeaderState::with(n, self.leader_state.max_pid, self.leader_state.quorum);
             // Flush any pending writes
@@ -40,6 +47,8 @@ where
             self.leader_state.set_promise(my_promise, self.pid, true);
             /* initialise longest chosen sequence and update state */
             self.state = (Role::Leader, Phase::Prepare);
+            #[cfg(feature = "logging")]
+            self.update_state_label();
             let prep = Prepare {
                 n,
                 decided_idx,
@@ -61,6 +70,8 @@ where
 
     pub(crate) fn become_follower(&mut self) {
         self.state.0 = Role::Follower;
+        #[cfg(feature = "logging")]
+        self.update_state_label();
     }
 
     pub(crate) fn handle_preparereq(&mut self, prepreq: PrepareReq, from: NodeId) {
@@ -106,6 +117,15 @@ where
             to,
             msg: PaxosMsg::Prepare(prep),
         }));
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[SEND][PREPARE] to={} ballot={:?} decided_idx={} accepted_idx={}",
+            to,
+            prep.n,
+            prep.decided_idx,
+            prep.accepted_idx,
+        );
     }
 
     pub(crate) fn accept_entry_leader(&mut self, entry: T) {
@@ -182,12 +202,23 @@ where
             #[cfg(feature = "unicache")]
             unicache: self.internal_storage.get_unicache(),
         };
+        #[cfg(feature = "logging")]
+        let (log_decided_idx, log_seq_num) = (acc_sync.decided_idx, acc_sync.seq_num);
         let msg = Message::SequencePaxos(PaxosMessage {
             from: self.pid,
             to,
             msg: PaxosMsg::AcceptSync(acc_sync),
         });
         self.outgoing.push(msg);
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[SEND][ACCEPT_SYNC] to={} ballot={:?} decided_idx={} seq_num={:?}",
+            to,
+            current_n,
+            log_decided_idx,
+            log_seq_num,
+        );
     }
 
     fn send_acceptdecide(&mut self, accepted: AcceptedMetaData<T>) {
@@ -212,11 +243,23 @@ where
                         id: (0, 0),
                         deadline: self.dom.get_deadline(),
                     };
+                    #[cfg(feature = "logging")]
+                    let (acc_entries_len, acc_decided_idx, acc_seq_num) =
+                        (acc.entries.len(), acc.decided_idx, acc.seq_num);
                     self.outgoing.push(Message::SequencePaxos(PaxosMessage {
                         from: self.pid,
                         to: pid,
                         msg: PaxosMsg::AcceptDecide(acc),
                     }));
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "[SEND][ACCEPT_DECIDE] to={} entries={} decided_idx={} seq_num={:?}",
+                        pid,
+                        acc_entries_len,
+                        acc_decided_idx,
+                        acc_seq_num,
+                    );
                 }
             }
         }
@@ -257,6 +300,15 @@ where
             to,
             msg: PaxosMsg::Decide(d),
         }));
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[SEND][DECIDE] to={} decided_idx={} hash={} resend={}",
+            to,
+            decided_idx,
+            0_u64,
+            resend,
+        );
     }
 
     fn handle_majority_promises(&mut self) {
@@ -282,6 +334,15 @@ where
             }
         }
         self.state = (Role::Leader, Phase::Accept);
+        #[cfg(feature = "logging")]
+        self.update_state_label();
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[LEADER] majority promises received → Accept phase, accepted_idx={} sending AcceptSync to {} followers",
+            new_accepted_idx,
+            self.leader_state.get_promised_followers().len(),
+        );
         self.leader_state
             .set_accepted_idx(self.pid, new_accepted_idx);
         for pid in self.leader_state.get_promised_followers() {
@@ -320,13 +381,14 @@ where
 
     pub(crate) fn handle_accepted(&mut self, accepted: Accepted, from: NodeId) {
         #[cfg(feature = "logging")]
-        trace!(
+        info!(
             self.logger,
-            "Got Accepted from {}, idx: {}, chosen_idx: {}, accepted: {:?}",
+            "[RECV][ACCEPTED] from={} accepted_idx={} decided_idx={} quorum_progress={}/{}",
             from,
             accepted.accepted_idx,
             self.internal_storage.get_decided_idx(),
-            self.leader_state.accepted_indexes
+            self.leader_state.accepted_indexes.iter().filter(|&&a| a >= accepted.accepted_idx).count(),
+            self.leader_state.accepted_indexes.len(),
         );
         if accepted.n == self.leader_state.n_leader && self.state == (Role::Leader, Phase::Accept) {
             self.leader_state
@@ -334,6 +396,12 @@ where
             if accepted.accepted_idx > self.internal_storage.get_decided_idx()
                 && self.leader_state.is_chosen(accepted.accepted_idx)
             {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[LEADER][SLOW_PATH] quorum reached accepted_idx={} → deciding",
+                    accepted.accepted_idx,
+                );
                 let decided_idx = accepted.accepted_idx;
                 self.internal_storage
                     .set_decided_idx(decided_idx)

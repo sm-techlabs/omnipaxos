@@ -13,6 +13,15 @@ where
     pub(crate) fn handle_prepare(&mut self, prep: Prepare, from: NodeId) {
         let old_promise = self.internal_storage.get_promise();
         if old_promise < prep.n || (old_promise == prep.n && self.state.1 == Phase::Recover) {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[RECV][PREPARE] from={} ballot={:?} their_decided_idx={} their_accepted_idx={} → sending Promise",
+                from,
+                prep.n,
+                prep.decided_idx,
+                prep.accepted_idx,
+            );
             // Flush any pending writes
             // Don't have to handle flushed entries here because we will sync with followers
             let _ = self.internal_storage.flush_batch().expect(WRITE_ERROR_MSG);
@@ -20,6 +29,8 @@ where
                 .set_promise(prep.n)
                 .expect(WRITE_ERROR_MSG);
             self.state = (Role::Follower, Phase::Prepare);
+            #[cfg(feature = "logging")]
+            self.update_state_label();
             self.current_seq_num = SequenceNumber::default();
             let na = self.internal_storage.get_accepted_round();
             let accepted_idx = self.internal_storage.get_accepted_idx();
@@ -65,6 +76,18 @@ where
                 accepted_idx: new_accepted_idx,
             };
             self.state = (Role::Follower, Phase::Accept);
+            #[cfg(feature = "logging")]
+            self.update_state_label();
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[RECV][ACCEPT_SYNC] from={} ballot={:?} decided_idx={} new_accepted_idx={} seq_num={:?} → entering Accept phase",
+                from,
+                accsync.n,
+                accsync.decided_idx,
+                new_accepted_idx,
+                accsync.seq_num,
+            );
             self.current_seq_num = accsync.seq_num;
             let cached_idx = self.outgoing.len();
             self.latest_accepted_meta = Some((accsync.n, cached_idx));
@@ -119,6 +142,14 @@ where
                 new_accepted_idx = flushed_after_decide;
             }
             if let Some(idx) = new_accepted_idx {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[RECV][ACCEPT_DECIDE] accepted_idx={} decided_idx={} fast_path={}",
+                    idx,
+                    decided_idx,
+                    is_from_early_buffer,
+                );
                 if is_from_early_buffer {
                     self.reply_fast_accepted(idx, deadline, id);
                 } else {
@@ -167,6 +198,14 @@ where
                 return;
             }
 
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[RECV][DECIDE] from={} decided_idx={} hash={} → committed",
+                dec.n.pid,
+                dec.decided_idx,
+                dec.hash,
+            );
             let new_accepted_idx = self.update_decided_idx_and_get_accepted_idx(dec.decided_idx);
             if let Some(idx) = new_accepted_idx {
                 self.reply_accepted(dec.n, idx);
@@ -207,6 +246,13 @@ where
                     to: n.pid,
                     msg: PaxosMsg::Accepted(accepted),
                 }));
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[SEND][ACCEPTED] to={} accepted_idx={}",
+                    n.pid,
+                    accepted_idx,
+                );
             }
         }
     }
@@ -319,7 +365,17 @@ where
         let msg_status = self.current_seq_num.check_msg_status(seq_num);
         match msg_status {
             MessageStatus::Expected => self.current_seq_num = seq_num,
-            MessageStatus::DroppedPreceding => self.reconnected(from),
+            MessageStatus::DroppedPreceding => {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[SEQ_GAP] expected={} got={:?} from={} → triggering recovery",
+                    self.current_seq_num.counter + 1,
+                    seq_num,
+                    from,
+                );
+                self.reconnected(from);
+            }
             MessageStatus::Outdated => (),
         };
         msg_status
@@ -343,6 +399,8 @@ where
                         #[cfg(feature = "logging")]
                         warn!(self.logger, "In Prepare phase without a cached promise!");
                         self.state = (Role::Follower, Phase::Recover);
+                        #[cfg(feature = "logging")]
+                        self.update_state_label();
                         self.send_preparereq_to_all_peers();
                     }
                 }
