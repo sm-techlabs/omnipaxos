@@ -33,10 +33,11 @@ now ready.
 paxos.append(value)
 ```
 
-The coordinator (any node, not necessarily the leader) calls `fast_propose_local`. This assigns
+The coordinator (any node, not necessarily the leader) calls `propose_entry`. This assigns
 a **deadline** (`simulated_clock.now() + 50`) and a unique **request key**
-`(coordinator_id, request_id)`. It registers the entry in `inflight_proposals` and broadcasts a
-`FastPropose` message to every node in the cluster, including itself.
+`(coordinator_id, request_id)` where `request_id` is a random `u64`. It registers the entry in
+`inflight_proposals` and broadcasts a `FastPropose` message to every node in the cluster,
+including itself.
 
 ```
 [P1 Fol/Acc]  [SEND][FAST_PROPOSE] coordinator=1 request=... deadline=...
@@ -46,9 +47,9 @@ a **deadline** (`simulated_clock.now() + 50`) and a unique **request key**
 ### Step 2 — Every node buffers the entry
 
 Each node receives the `FastPropose` and inserts the entry into its **early buffer** — a min-heap
-ordered by `(deadline, coordinator_id)`. Entries are *not* appended to the log yet; they wait
-for their deadline to pass. This shared ordering guarantee is the core of DOM: every node will
-release entries in the same sequence, regardless of network arrival order.
+ordered by `(deadline, id)` where `id = (coordinator_id, request_id)`. Entries are *not* appended
+to the log yet; they wait for their deadline to pass. This shared ordering guarantee is the core
+of DOM: every node will release entries in the same sequence, regardless of network arrival order.
 
 ```
 [P1 Fol/Acc]  [RECV] FastPropose from=1
@@ -60,7 +61,8 @@ release entries in the same sequence, regardless of network arrival order.
 
 `tick()` is called periodically. On each tick the simulated clock advances and `release_message()`
 is called in a `while let` loop. When `sim_clock.now() >= entry.deadline`, the entry is popped
-from the early buffer and handed to `handle_released_fast_entry`.
+from the early buffer and handed to `handle_released_fast_entry_leader` (on the leader) or
+`handle_released_fast_entry_follower` (on followers), depending on the node's current role.
 
 ```
 [P1 Fol/Acc]  [INFO][FAST_PATH][BUFFER] releasing request=... coordinator=1 deadline=...
@@ -74,14 +76,14 @@ Every node in `(*, Accept)` appends the entry to its log. The DOM records a **cu
 of all entries accepted so far (including this one) at the new `accepted_idx`. Then:
 
 - **Non-leader nodes** send `FastAccepted` to the **leader** (carrying `accepted_idx` and `hash`)
-  and `FastReply` to the **coordinator** (carrying `hash`, but no `accepted_idx`).
+  and `FastReply` to the **coordinator** (carrying `accepted_idx` and `hash`).
 - **The leader** appends locally, records `accepted_idx`, and sends `FastReply` to the coordinator
-  with both the `hash` and the authoritative `accepted_idx`.
+  with the `hash` and the authoritative `accepted_idx`.
 
 ```
 [P1 Fol/Acc]  [RECV][ACCEPT_DECIDE] accepted_idx=1 decided_idx=0 fast_path=true
 [P1 Fol/Acc]  [SEND][FAST_ACCEPTED] to=3 request=... accepted_idx=1 hash=...
-[P1 Fol/Acc]  [SEND][FAST_REPLY]    to=1 from=1 request=... accepted_idx=None hash=...
+[P1 Fol/Acc]  [SEND][FAST_REPLY]    to=1 from=1 request=... accepted_idx=Some(1) hash=...
 [P3 Ldr/Acc]  [INFO][FAST_PATH] leader appended coordinator=1 request=... accepted_idx=1 hash=...
 [P3 Ldr/Acc]  [SEND][FAST_REPLY]    to=1 from=3 request=... accepted_idx=Some(1) hash=...
 ```
@@ -96,9 +98,9 @@ have reported the same hash for `accepted_idx`, the leader calls `fast_decide`: 
 `decided_idx` and broadcasts `Decide(decided_idx, hash)` to all peers.
 
 **At the coordinator**: `FastReply` messages are collected in `fast_reply_tracker`. Only the
-leader's reply carries `accepted_idx`; other replies are only counted if their hash matches the
-leader's. When `fast_quorum` matching replies are accumulated, the coordinator calls
-`set_decided_idx` locally — this is the **1-RTT client commit point** — before any `Decide`
+leader's reply carries the authoritative `accepted_idx`; other replies are only counted if their
+hash matches the leader's. When `fast_quorum` matching replies are accumulated, the coordinator
+calls `set_decided_idx` locally — this is the **1-RTT client commit point** — before any `Decide`
 message has been sent.
 
 The fast quorum size is `1 + ⌊(3(N−1) + 3) / 4⌋`. For N=3 this equals 3 (all nodes); for N=7
@@ -112,10 +114,11 @@ it equals 6.
 
 ### Step 6 — Decide is broadcast; followers commit
 
-The leader sends `Decide(decided_idx, hash≠0)` to every peer. Each follower checks its recorded
-DOM hash at `accepted_idx - 1`. If it matches, the entry is committed. If it does **not** match
-(the follower's log is out of sync), `reconnected()` is called, triggering Phase 1 recovery
-(see below).
+The leader sends `Decide(decided_idx, hash≠0)` to every peer. Each follower compares `dec.hash`
+against its own `dom.last_log_hash` (the cumulative hash through its current accepted index).
+If the hashes differ, the follower **adopts the leader's hash directly** — no Phase 1 recovery
+is triggered. Phase 1 recovery is only triggered when the follower is **missing entries** (i.e.,
+`decided_idx > accepted_idx`).
 
 ```
 [P3 Ldr/Acc]  [SEND][DECIDE] to=1 decided_idx=1 hash=... resend=false
@@ -157,19 +160,23 @@ via `is_chosen`. If yes, the leader decides via the slow path:
 
 ## Phase 1 recovery (reconnect after partition)
 
-When a follower reconnects after missing entries, it will eventually receive a message from the
-leader whose session or sequence number doesn't match. `handle_sequence_num` detects the gap
-(`DroppedPreceding`) and triggers `reconnected(leader)`.
+When a follower is missing log entries, it will receive a `Decide` whose `decided_idx` exceeds
+its own `accepted_idx`. `handle_decide` detects this and triggers `reconnected(leader_pid)`.
 
 `reconnected` transitions the node to `(Follower, Recover)` and sends a `PrepareReq` to the
-leader. The leader responds with a `Prepare`. The follower replies with a `Promise` (attaching a
-log sync if it is more up to date). The leader, once it has heard from a majority, sends an
-`AcceptSync` containing all missing entries up to `decided_idx`. The follower applies them,
-transitions to `(Follower, Accept)`, and sends `Accepted`. From this point the follower
-participates normally.
+node it detected the gap from (the leader). The leader responds immediately with a `Prepare`
+(no majority wait — this is a reconnect, not a fresh election). The follower replies with a
+`Promise` (attaching a log sync if it is more up to date). The leader sends an `AcceptSync`
+immediately to the promiser containing all missing entries up to `decided_idx`. The follower
+applies them, transitions to `(Follower, Accept)`, sets `dom.last_log_hash` from the AcceptSync's
+`dom_hash` field, and sends `Accepted`. From this point the follower participates normally.
+
+A sequence-number gap (`DroppedPreceding` from `handle_sequence_num`) also triggers
+`reconnected`, for the case where a follower reconnects and receives a message with an ahead
+sequence number before seeing a `Decide`.
 
 ```
-[P7 Fol/---]  [RECOVER] gap detected from=6 → entering Recover phase
+[P7 Fol/---]  [RECOVER] gap detected from=6 → entering Recover phase, sending PrepareReq
 [P6 Ldr/Acc]  [SEND][PREPARE]      to=7 decided_idx=4 accepted_idx=4
 [P7 Fol/Pre]  [RECV][PREPARE]      from=6 → sending Promise
 [P6 Ldr/Acc]  [SEND][ACCEPT_SYNC]  to=7 decided_idx=4
@@ -185,6 +192,7 @@ participates normally.
 | Leader election | BLE timeout | HeartbeatReq/Reply | `Ldr/Pre` → `Ldr/Acc`, peers `Fol/Acc` |
 | Fast propose | `append()` | `FastPropose` → early buffer | buffered |
 | Fast accept | `tick()` releases deadline | `FastAccepted` → leader, `FastReply` → coordinator | appended locally |
-| Fast decide | super-quorum at coordinator | coordinator commits; leader broadcasts `Decide(hash≠0)` | all committed |
+| Fast decide (leader) | fast_quorum `FastAccepted` at leader | leader sets `decided_idx`, broadcasts `Decide(hash≠0)` | all committed |
+| Fast decide (coordinator) | fast_quorum `FastReply` at coordinator | coordinator sets `decided_idx` locally (1-RTT) | coordinator committed |
 | Slow decide | resend timer | `Decide(hash=0)` + fallback `AcceptDecide` | all committed |
-| Recovery | seq-num gap / hash mismatch | `PrepareReq` → `Prepare` → `Promise` → `AcceptSync` → `Accepted` | `Fol/Acc` |
+| Recovery | missing entries in `Decide` / seq-num gap | `PrepareReq` → `Prepare` → `Promise` → `AcceptSync` → `Accepted` | `Fol/Acc` |
