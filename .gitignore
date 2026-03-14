@@ -13,3 +13,7 @@ docs/.DS_Store
 .DS_Store
 */.idea/*
 
+ACTION_PLAN.md
+CLAUDE.md
+.claude/
+.cargo/config.toml

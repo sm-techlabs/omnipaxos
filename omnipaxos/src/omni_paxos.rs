@@ -289,6 +289,13 @@ where
         self.seq_paxos.get_promise()
     }
 
+    /// Returns the current cumulative DOM log hash for this node.
+    /// Used in tests to verify that nodes have applied the same fast-path
+    /// metadata sequence and to observe hash divergence after slow-path accepts.
+    pub fn get_dom_hash(&self) -> u64 {
+        self.seq_paxos.get_dom_hash()
+    }
+
     /// Moves outgoing messages from this server into the buffer. The messages should then be sent via the network implementation.
     pub fn take_outgoing_messages(&mut self, buffer: &mut Vec<Message<T>>) {
         self.seq_paxos.take_outgoing_msgs(buffer);
@@ -383,6 +390,9 @@ where
         if self.flush_batch_clock.tick_and_check_timeout() {
             self.seq_paxos.flush_batch_timeout();
         }
+        // Even if this introduces delay before releasing msgs from the early
+        // buffer, it doesn't mess with the deadline-based ordering
+        self.seq_paxos.tick();
     }
 
     /// Manually attempt to become the leader by incrementing this instance's Ballot. Calling this

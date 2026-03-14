@@ -1,2 +1,0 @@
-On tick(), we can check what we can/should release from the Early buffer.
-
