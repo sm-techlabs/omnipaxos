@@ -222,22 +222,28 @@ where
                 return;
             }
 
-            // Fast-path DOM hash correction: if the leader's hash differs from ours,
-            // adopt it directly.  A hash mismatch here means the leader chose a
-            // different deadline ordering for an entry (deadline reordering / Case 1
-            // reorder) — the log *entries* are guaranteed consistent by Paxos safety,
-            // so we correct the DOM hash chain without an expensive Phase 1 recovery.
-            if dec.hash != 0 && dec.hash != self.dom.last_log_hash {
-                #[cfg(feature = "logging")]
-                info!(
-                    self.logger,
-                    "[DECIDE][DOM_HASH] adopting leader hash at decided_idx={}: \
-                     {} → {} (deadline reorder correction)",
-                    dec.decided_idx,
-                    self.dom.last_log_hash,
-                    dec.hash,
-                );
-                self.dom.last_log_hash = dec.hash;
+            // Fast-path DOM hash correction: compare the leader's hash for
+            // decided_idx against the follower's hash *at that same position*,
+            // not against last_log_hash.  The follower may have fast-accepted
+            // entries beyond decided_idx whose hashes are still valid; blindly
+            // overwriting last_log_hash would corrupt them.
+            if dec.hash != 0 {
+                let our_hash_at_decided = self
+                    .dom
+                    .get_hash_at(dec.decided_idx)
+                    .unwrap_or(self.dom.last_log_hash);
+                if dec.hash != our_hash_at_decided {
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "[DECIDE][DOM_HASH] patching hash chain at decided_idx={}: \
+                         {} → {} (deadline reorder correction)",
+                        dec.decided_idx,
+                        our_hash_at_decided,
+                        dec.hash,
+                    );
+                    self.dom.patch_hash_at(dec.decided_idx, dec.hash);
+                }
             }
 
             #[cfg(feature = "logging")]

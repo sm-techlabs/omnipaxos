@@ -442,12 +442,11 @@ where
                         // Case 2: the leader already released this entry with a reordered
                         // deadline (and therefore a different hash).  The follower accepted
                         // the original deadline and has an inconsistent DOM hash.
-                        // Send a Decide carrying the leader's correct hash; handle_decide
-                        // on the follower will detect the mismatch and call reconnected().
+                        // Send a Decide whose decided_idx equals accepted_idx so the
+                        // follower knows exactly which position to patch in its hash chain.
                         if let Some(correct_hash) =
                             self.dom.get_hash_at(accepted.accepted_idx)
                         {
-                            let decided_idx = self.internal_storage.get_decided_idx();
                             #[cfg(feature = "logging")]
                             info!(
                                 self.logger,
@@ -458,7 +457,7 @@ where
                                 accepted.hash,
                                 correct_hash,
                             );
-                            self.send_decide(from, decided_idx, false, correct_hash);
+                            self.send_decide(from, accepted.accepted_idx, false, correct_hash);
                         }
                         // If the leader hasn't released this slot yet (Case 1), the
                         // proactive Decide is sent from handle_released_fast_entry_leader
@@ -525,7 +524,8 @@ where
                     // (pre-reorder) deadline before the leader processed this slot.
                     // Their hash H1 != our H2.  All nodes currently in the quorum tracker
                     // for this slot used H1 and need recovery.
-                    let decided_idx = self.internal_storage.get_decided_idx();
+                    // Use accepted_idx (not get_decided_idx()) as decided_idx so the
+                    // follower knows exactly which position to patch in its hash chain.
                     let followers_to_recover: Vec<NodeId> = self
                         .dom
                         .get_replicas_with_wrong_hash(accepted_idx)
@@ -544,7 +544,7 @@ where
                         );
                     }
                     for follower in followers_to_recover {
-                        self.send_decide(follower, decided_idx, false, hash);
+                        self.send_decide(follower, accepted_idx, false, hash);
                     }
                 }
                 FastAcceptedOutcome::Pending => {}
