@@ -114,11 +114,21 @@ it equals 6.
 
 ### Step 6 — Decide is broadcast; followers commit
 
-The leader sends `Decide(decided_idx, hash≠0)` to every peer. Each follower compares `dec.hash`
-against its own `dom.last_log_hash` (the cumulative hash through its current accepted index).
-If the hashes differ, the follower **adopts the leader's hash directly** — no Phase 1 recovery
-is triggered. Phase 1 recovery is only triggered when the follower is **missing entries** (i.e.,
-`decided_idx > accepted_idx`).
+The leader sends `Decide(decided_idx, hash≠0)` to every peer. Each follower first checks for
+missing entries: if `decided_idx > accepted_idx`, Phase 1 recovery is triggered. Otherwise it
+compares `dec.hash` against its own recorded hash **at `dec.decided_idx`** specifically
+(`dom.get_hash_at(dec.decided_idx)`), not against `last_log_hash`. This is important because the
+follower may have fast-accepted entries beyond `decided_idx` whose hashes are still valid; those
+must not be disturbed.
+
+If there is a mismatch, `dom.patch_hash_at(decided_idx, dec.hash)` corrects the chain: it
+computes the XOR delta between the old hash at `decided_idx` and the leader's correct hash, then
+applies that delta to every entry in `log_hashes` from that position onwards, and to
+`last_log_hash`. This preserves the validity of all entries accepted after `decided_idx`.
+
+**Hash-correction Decides from the leader** (deadline reorder / Case 1 and Case 2 of
+`HashMismatch`) carry `decided_idx = accepted_idx` — not `get_decided_idx()` — so the follower
+always knows which exact log position the hash refers to.
 
 ```
 [P3 Ldr/Acc]  [SEND][DECIDE] to=1 decided_idx=1 hash=... resend=false
