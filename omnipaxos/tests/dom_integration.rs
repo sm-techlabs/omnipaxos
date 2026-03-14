@@ -139,14 +139,15 @@ fn print_final_logs(sys: &TestSystem, test_name: &str) {
     pids.sort_unstable();
 
     for pid in pids {
-        let (decided_idx, entries) = sys.nodes.get(&pid).unwrap().on_definition(|x| {
+        let (decided_idx, entries, dom_hash) = sys.nodes.get(&pid).unwrap().on_definition(|x| {
             let decided_idx = x.paxos.get_decided_idx();
             let entries = x.paxos.read_entries(0..decided_idx).unwrap_or_default();
-            (decided_idx, entries)
+            let dom_hash = x.paxos.get_dom_hash();
+            (decided_idx, entries, dom_hash)
         });
 
         eprintln!(
-            "\x1b[35m├─ Node {pid}  (decided_idx={decided_idx}, entries={})\x1b[0m",
+            "\x1b[35m├─ Node {pid}  (decided_idx={decided_idx}, entries={}, dom_hash={dom_hash:#018x})\x1b[0m",
             entries.len()
         );
 
@@ -187,6 +188,22 @@ fn dom_default_testcfg(num_nodes: Option<usize>) -> TestConfig {
     }
 }
 
+/// Edge case: fast-path 1-RTT coordinator decision arrives before the
+/// cluster-wide Decide reaches a lagging node.
+///
+/// N=7, fast_quorum=6.  The leader→lagging link is severed before the first
+/// proposal so the Decide broadcast can never reach lagging.  The coordinator
+/// appends a value and immediately receives a fast-path reply (1 RTT), deciding
+/// it locally before any Decide has been sent cluster-wide.
+///
+/// Verified properties:
+///   - When the coordinator's fast-path future fires, lagging's decided_idx is
+///     still 0 — proving the coordinator decided strictly before the
+///     cluster-wide Decide reached lagging.
+///   - Lagging has the entry in its log as Undecided (it accepted via fast path
+///     but hasn't committed because the Decide is blocked).
+///   - After reconnecting lagging and appending a second value, all 7 nodes
+///     eventually commit both entries.
 #[test]
 #[serial]
 fn fast_path_coordinator_decides_before_cluster_wide_decide() {
@@ -220,6 +237,20 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
         .wait_timeout(cfg.wait_timeout)
         .expect("Coordinator did not decide the fast-path proposal in time");
 
+    // At this exact moment the coordinator has its fast-path 1-RTT reply.
+    // The cluster-wide Decide cannot have reached lagging because
+    // leader→lagging is blocked, so lagging must still be undecided.
+    let lagging_decided_idx = sys
+        .nodes
+        .get(&lagging)
+        .unwrap()
+        .on_definition(|x| x.paxos.get_decided_idx());
+    assert_eq!(
+        lagging_decided_idx, 0,
+        "lagging must not have decided yet when coordinator gets its fast-path reply \
+         (leader→lagging link is blocked)"
+    );
+
     wait_until(cfg.wait_timeout, || {
         read_entries(&sys, lagging, 1) == vec![LogEntry::Undecided(first_value.clone())]
     });
@@ -250,19 +281,26 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
     shutdown(sys);
 }
 
-/// Test 3 — Partial Fast Quorum falls back to Slow Path
+/// Edge case: fast quorum not reached, system must fall back to the slow path.
 ///
-/// With N=3 and fast_quorum=3, blocking the coordinator's outgoing link to
-/// one follower means only 2 FastAccepted messages reach the leader (below the
-/// super quorum).  The system must detect the stall on the resend tick and
-/// fall back to the slow path (regular quorum decide + AcceptDecide to the
-/// lagging follower).  After reconnection, all three nodes must eventually
-/// decide both values.
+/// N=3, fast_quorum=3 (all nodes required).  The coordinator's outgoing link
+/// to one follower is severed so that follower never receives the FastPropose.
+/// Only 2 FastAccepted messages reach the leader, which is below the super
+/// quorum threshold — the fast path cannot complete.
+///
+/// Verified properties:
+///   - The resend timer detects the stall (accepted_idx > decided_idx, regular
+///     quorum already satisfied by the 2 connected nodes) and commits via the
+///     slow path.
+///   - The lagging follower receives the entry via a fallback AcceptDecide and
+///     eventually decides it.
+///   - After reconnecting, a second value is proposed and all 3 nodes decide
+///     both entries, confirming recovery is clean.
 #[test]
 #[serial]
 fn partial_fast_quorum_falls_back_to_slow_path() {
     test_begin("partial_fast_quorum_falls_back_to_slow_path");
-    let cfg = dom_default_testcfg(None);
+    let cfg = dom_default_testcfg(Some(3)); // N=3 so fast_quorum=3; blocking one follower drops below quorum
     let sys = TestSystem::with(cfg);
     sys.start_all_nodes();
 
@@ -323,13 +361,22 @@ fn partial_fast_quorum_falls_back_to_slow_path() {
     shutdown(sys);
 }
 
-/// Test 4 — Coordinator Crash: system still eventually decides
+/// Edge case: coordinator crashes after broadcasting FastPropose but before the
+/// super quorum can be reached.
 ///
-/// The coordinator broadcasts FastPropose then is killed before it can send its
-/// own FastAccepted (or before the super quorum is reached).  With only 2 out
-/// of 3 nodes left alive, fast_quorum=3 is never met.  The leader's resend
-/// timer must detect the stall (regular quorum met) and decide via the slow
-/// path so the two surviving nodes commit the entry.
+/// N=3, fast_quorum=3.  The coordinator appends a value (which broadcasts
+/// FastPropose to all nodes), then is killed after a short delay.  With only 2
+/// surviving nodes, fast_quorum=3 can never be met.
+///
+/// Verified properties:
+///   - The two surviving nodes release the entry from their DOM buffers after
+///     the deadline expires, fast-accept it, and send FastAccepted to the
+///     leader.
+///   - Only 2 FastAccepted arrive (below super quorum) so fast_decide is not
+///     triggered.  The resend timer detects the stall, sees that the regular
+///     quorum (2/2 surviving nodes) is met, and decides via the slow path.
+///   - Both surviving nodes eventually commit the entry, proving the algorithm
+///     terminates despite coordinator failure.
 #[test]
 #[serial]
 fn coordinator_crash_still_decides() {
@@ -368,15 +415,23 @@ fn coordinator_crash_still_decides() {
     shutdown(sys);
 }
 
-/// Test 5 — Divergent Logs reconcile via Slow Path (AcceptSync)
+/// Edge case: a fully partitioned follower's log diverges from the cluster;
+/// Phase 1 recovery (AcceptSync) must reconcile it.
 ///
-/// A follower that was fully partitioned for multiple fast-path proposals ends
-/// up with an empty log while the rest of the cluster has committed several
-/// entries.  When the follower reconnects and a new proposal arrives, the
-/// per-follower seq_num advanced by the leader's resend fallback causes the
-/// follower to detect the gap (DroppedPreceding) and trigger Phase 1 recovery
-/// (PrepareReq → Prepare → Promise → AcceptSync), bringing all nodes into
-/// agreement.
+/// N=7.  One follower is completely isolated while two entries are proposed and
+/// decided by the rest of the cluster.  The leader's resend fallback also
+/// advances the per-follower seq_num counter for the isolated node even though
+/// the messages can't be delivered.
+///
+/// Verified properties:
+///   - After reconnecting the isolated node, a third proposal triggers a
+///     DroppedPreceding sequence-number gap which fires Phase 1 recovery
+///     (PrepareReq → Prepare → Promise → AcceptSync).
+///   - The AcceptSync delivers the missing entries to the isolated node with
+///     the correct DOM hash, bringing it fully in sync.
+///   - All 7 nodes decide exactly [v1, v2, v3] in that order.  (v1 and v2
+///     come from the same coordinator in sequence so their deadlines are
+///     strictly ordered.)
 #[test]
 #[serial]
 fn divergent_logs_reconcile_via_slow_path() {
@@ -426,17 +481,14 @@ fn divergent_logs_reconcile_via_slow_path() {
         .wait_timeout(cfg.wait_timeout)
         .expect("v3 did not decide on coordinator in time");
 
-    // Verify all nodes have decided all 3 entries.  We check decided_idx
-    // rather than reading the log contents because OmniPaxos may have
-    // snapshotted entries during the AcceptSync recovery, which would cause
-    // read_decided_values to panic on Snapshotted log entries.
-    let expected_decided_idx = 3;
+    // Verify all nodes decided exactly [v1, v2, v3] in that order.
+    // ValueSnapshot preserves entry order so read_decided_values handles
+    // snapshotted entries correctly.  v1 and v2 are sequential proposals
+    // from the same coordinator, giving v1.deadline < v2.deadline, so DOM
+    // always releases them in order.
+    let expected = vec![v1, v2, v3];
     for pid in 1..=cfg.num_nodes as NodeId {
-        wait_until(cfg.wait_timeout, || {
-            sys.nodes.get(&pid).unwrap().on_definition(|x| {
-                x.paxos.get_decided_idx() >= expected_decided_idx
-            })
-        });
+        wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
     print_final_logs(&sys, "divergent_logs_reconcile_via_slow_path");
@@ -444,6 +496,25 @@ fn divergent_logs_reconcile_via_slow_path() {
     shutdown(sys);
 }
 
+/// Edge case: two concurrent fast-path proposals carry an identical deadline;
+/// the tie-break rule must produce a deterministic, globally-agreed log order.
+///
+/// N=7, fast_quorum=6.  Two coordinators (pids 2 and 3) simultaneously inject
+/// a FastPropose to all 7 nodes.  Both proposals use `shared_deadline`, so the
+/// DOM `early_buffer` (a min-heap on deadline) holds them with equal priority.
+///
+/// Tie-break semantics (`AcceptDecide::Ord`):
+///   The heap is a min-heap on deadline, so equal deadlines use the secondary
+///   comparator `self.id.cmp(&other.id)` in ascending order — meaning the entry
+///   with the **larger** `(coordinator_id, request_id)` tuple is treated as
+///   "smaller" in the heap (i.e. it is popped first).
+///   Here `id=(3, 300) > id=(2, 200)`, so coordinator 3's proposal (value 30)
+///   is released before coordinator 2's proposal (value 20).
+///
+/// Verified properties:
+///   - All 7 nodes release the two entries in the same order: [30, 20].
+///   - The final decided log on every node is exactly `[Value(30), Value(20)]`,
+///     confirming a consistent global order from the tie-break rule.
 #[test]
 #[serial]
 fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
@@ -577,11 +648,14 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
 /// threshold so all three concurrent proposals fast-decide on the six connected
 /// nodes.
 ///
-/// After reconnecting the partitioned node a fourth proposal is injected.  The
-/// leader's Decide for proposal 4 carries a DOM hash that spans all four
-/// entries.  The reconnected node, whose DOM log only contains entry 4, sees a
-/// hash mismatch, calls reconnected(), and recovers via Phase 1
-/// (PrepareReq → AcceptSync), bringing all seven nodes into agreement.
+/// The straggler is chosen as the lowest-pid non-leader so that it cannot win
+/// BLE re-election after reconnection (BLE breaks ties by pid; the highest pid
+/// wins, so a low-pid straggler remains a follower).
+///
+/// After reconnecting the straggler a fourth proposal is injected.  The
+/// straggler's `accepted_idx=0` is behind the FastPropose's `decided_idx=3` →
+/// stale-log guard fires → `reconnected()` → Phase 1 recovery delivers all
+/// four entries via AcceptSync, bringing all seven nodes into agreement.
 #[test]
 #[serial]
 fn seven_nodes_multiple_coordinators_straggler_recovers() {
@@ -592,8 +666,12 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
 
-    // Node 7 is completely partitioned; it misses all three initial proposals.
-    let straggler: NodeId = 7;
+    // Pick the straggler as the lowest-pid non-leader node so it can never
+    // win a BLE re-election (BLE breaks ballot ties by pid; the highest pid
+    // always wins, so a low-pid straggler stays a follower after reconnection).
+    let straggler: NodeId = (1..=cfg.num_nodes as NodeId)
+        .find(|&pid| pid != leader)
+        .expect("straggler");
     sys.set_node_connections(straggler, false);
 
     // Three distinct coordinators propose concurrently.
@@ -633,9 +711,9 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
     }
 
     // Reconnect the straggler and inject a fourth proposal so that every node
-    // participates in the fast path.  The Decide for entry 4 carries the
-    // cumulative DOM hash of all four entries.  The straggler's DOM log only
-    // has entry 4 (hash mismatch) → reconnected() → Phase 1 recovery.
+    // participates in the fast path.  The straggler's decided_idx=0 is behind
+    // the FastPropose's decided_idx=3 → stale-log guard fires → reconnected()
+    // → Phase 1 recovery delivers all four entries via AcceptSync.
     sys.set_node_connections(straggler, true);
 
     let (kprom, kfuture) = promise::<()>();
@@ -647,15 +725,23 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
         .wait_timeout(cfg.wait_timeout)
         .expect("v4 did not decide in time");
 
-    // After Phase 1 recovery the straggler must have all four entries committed.
-    // We check decided_idx (not the raw log) because snapshotting may occur
-    // during AcceptSync.
+    // After Phase 1 recovery every node must have all four entries committed.
+    // v1/v2/v3 were proposed concurrently so their log order is determined by
+    // DOM deadlines and is non-deterministic.  v4 is always last (proposed
+    // after the first three were already decided).  We therefore verify the
+    // set of decided values rather than their exact sequence.
     for pid in 1..=cfg.num_nodes as NodeId {
         wait_until(cfg.wait_timeout, || {
             sys.nodes.get(&pid).unwrap().on_definition(|x| {
                 x.paxos.get_decided_idx() >= 4
             })
         });
+        let decided = read_decided_values(&sys, pid);
+        assert_eq!(decided.len(), 4, "node {pid} should have exactly 4 decided entries");
+        assert!(decided.contains(&v1), "node {pid} missing v1");
+        assert!(decided.contains(&v2), "node {pid} missing v2");
+        assert!(decided.contains(&v3), "node {pid} missing v3");
+        assert!(decided.contains(&v4), "node {pid} missing v4");
     }
 
     print_final_logs(&sys, "seven_nodes_multiple_coordinators_straggler_recovers");
@@ -1025,5 +1111,238 @@ fn dom_hash_diverges_after_slow_path_decision() {
 
     print_final_logs(&sys, "dom_hash_diverges_after_slow_path_decision");
     test_end("dom_hash_diverges_after_slow_path_decision");
+    shutdown(sys);
+}
+
+/// Edge case: the leader receives a FastPropose whose deadline has already
+/// passed relative to its own `last_released_timestamp` (stale deadline).
+///
+/// Setup (N=3, fast_quorum=3):
+///   Step 1 — a warmup entry is injected to all nodes with a known deadline
+///             D_warmup.  All three nodes fast-accept it, the fast quorum is
+///             met, and every node decides it.  After this step every node's
+///             `last_released_timestamp = D_warmup`.
+///
+///   Step 2 — a second entry is injected with `stale_deadline = D_warmup - 1`
+///             (one microsecond before the last release):
+///               * Followers use `handle_fast_propose` (no reordering): since
+///                 `stale_deadline <= last_released_timestamp`, the entry goes
+///                 into the `late_buffer` and is never fast-accepted.
+///               * The leader uses `handle_fast_propose_leader`: it detects the
+///                 stale deadline and bumps it to `last_released_timestamp + 1`
+///                 before inserting into `early_buffer`.
+///
+/// Verified properties:
+///   - The leader eventually releases the reordered entry, appends it to the
+///     log, and — since no fast quorum can be reached (followers never
+///     fast-accepted it) — the resend timer falls back to the slow path.
+///   - The fallback AcceptDecide carries the leader's `dom_hash`, which
+///     followers adopt on acceptance.
+///   - All 3 nodes decide both entries in order; their DOM hashes agree.
+#[test]
+#[serial]
+fn leader_reorders_stale_deadline_decides_via_slow_path() {
+    test_begin("leader_reorders_stale_deadline_decides_via_slow_path");
+    let cfg = dom_default_testcfg(Some(3));
+    let sys = TestSystem::with(cfg);
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+    let coordinator = (1..=cfg.num_nodes as NodeId)
+        .find(|&p| p != leader)
+        .expect("coordinator");
+    let ballot = sys
+        .nodes
+        .get(&leader)
+        .unwrap()
+        .on_definition(|x| x.paxos.get_promise());
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time is broken")
+        .as_micros() as i64;
+
+    // ── Step 1: decide a warmup entry via normal fast path ────────────────────
+    // All nodes receive the proposal with d_warmup.  Because d_warmup > LRT=0
+    // on every node, they all put it in their early_buffer.  All three
+    // fast-accept it, the super quorum (3/3) is met, and the entry is decided.
+    // After this every node has last_released_timestamp = d_warmup.
+    let d_warmup = now + 50_000; // 50 ms from now
+    let v_warmup = Value::with_id(5000);
+    let warmup_proposal = AcceptDecide {
+        n: ballot,
+        seq_num: SequenceNumber::default(),
+        decided_idx: 0,
+        entries: vec![v_warmup.clone()],
+        deadline: d_warmup,
+        id: (coordinator as u64, 5000),
+        dom_hash: 0,
+    };
+    inject_fast_propose(&sys, coordinator, warmup_proposal);
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &[v_warmup.clone()], cfg.wait_timeout);
+    }
+
+    // ── Step 2: inject the "late" entry ───────────────────────────────────────
+    // stale_deadline < d_warmup = last_released_timestamp on all nodes.
+    // Followers (handle_fast_propose): stale_deadline <= LRT → late_buffer.
+    // Leader  (handle_fast_propose_leader): stale_deadline <= LRT → reorder
+    //         to LRT+1, insert into early_buffer.
+    let stale_deadline = d_warmup - 1;
+    let v_late = Value::with_id(5001);
+    let late_proposal = AcceptDecide {
+        n: ballot,
+        seq_num: SequenceNumber::default(),
+        decided_idx: 1, // warmup is decided
+        entries: vec![v_late.clone()],
+        deadline: stale_deadline,
+        id: (coordinator as u64, 5001),
+        dom_hash: 0,
+    };
+    inject_fast_propose(&sys, coordinator, late_proposal);
+
+    // The leader reorders and eventually releases the entry; followers never
+    // fast-accept it (it is in their late_buffer).  The resend timer detects
+    // the stall (accepted_idx > decided_idx, quorum not met) and falls back to
+    // the slow path: a fallback AcceptDecide is sent to the followers.
+    // All three nodes must eventually decide both entries.
+    let expected = vec![v_warmup, v_late];
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
+    }
+
+    // After the slow-path fallback the leader's dom_hash is propagated to
+    // followers via the AcceptDecide's dom_hash field; all three must agree.
+    let hashes: Vec<u64> = (1..=cfg.num_nodes as NodeId)
+        .map(|p| get_dom_hash(&sys, p))
+        .collect();
+    assert!(
+        hashes.windows(2).all(|w| w[0] == w[1]),
+        "DOM hashes must agree after slow-path fallback for reordered entry: {:?}",
+        hashes,
+    );
+
+    print_final_logs(&sys, "leader_reorders_stale_deadline_decides_via_slow_path");
+    test_end("leader_reorders_stale_deadline_decides_via_slow_path");
+    shutdown(sys);
+}
+
+/// Edge case: a FastPropose arrives at the leader with a different deadline
+/// than the version that followers received, causing a hash mismatch on the
+/// leader's `FastAccepted` tracker.
+///
+/// Setup (N=3, fast_quorum=3):
+///   The same entry (same `id`) is injected with two different deadlines:
+///     - D1 (small) → sent to all **followers** only.  Each follower puts it
+///       in its `early_buffer`, releases it when D1 expires, fast-accepts, and
+///       sends `FastAccepted { hash=H1 }` to the leader.
+///     - D2 >> D1 → sent to the **leader** only.  The leader puts it in its
+///       `early_buffer`, releases it later (when D2 expires), appends it, and
+///       computes `H2 ≠ H1` (different deadline → different DomMetadata).
+///
+/// Hash-mismatch correction path:
+///   The followers' FastAccepted messages (hash=H1) arrive at the leader before
+///   the leader releases its own entry (because D1 fires first).  When the
+///   leader subsequently processes its own entry with H2, it calls
+///   `dom.handle_fast_accepted` which returns `HashMismatch` (H2 ≠ H1 = qd.hash).
+///   The leader identifies all followers in the quorum tracker (they all used
+///   H1) and sends each a `Decide` carrying H2.  Each follower's `handle_decide`
+///   directly adopts H2 as its `dom.last_log_hash` (no Phase 1 recovery needed —
+///   Paxos guarantees the log entries are correct; only the deadline-derived hash
+///   metadata needs updating).  The stall-recovery path then decides the entry
+///   via the slow path and all nodes converge.
+///
+/// Verified properties:
+///   - All 3 nodes decide the entry.
+///   - All 3 nodes have the same `dom.last_log_hash` after convergence (= H2,
+///     the leader's authoritative hash).
+#[test]
+#[serial]
+fn hash_mismatch_on_fast_accepted_triggers_recovery() {
+    test_begin("hash_mismatch_on_fast_accepted_triggers_recovery");
+    let cfg = dom_default_testcfg(Some(3));
+    let sys = TestSystem::with(cfg);
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+    let coordinator = (1..=cfg.num_nodes as NodeId)
+        .find(|&p| p != leader)
+        .expect("coordinator");
+    let ballot = sys
+        .nodes
+        .get(&leader)
+        .unwrap()
+        .on_definition(|x| x.paxos.get_promise());
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time is broken")
+        .as_micros() as i64;
+
+    // D1: deadline given to followers  — fires in ~50 ms.
+    // D2: deadline given to the leader — fires in ~300 ms.
+    // D1 fires first so followers fast-accept with H1 and their FastAccepted
+    // reach the leader before the leader releases its own copy (at D2).
+    let d1 = now + 50_000;
+    let d2 = now + 300_000;
+
+    let value = Value::with_id(5100);
+    let entry_id = (coordinator as u64, 5100u64);
+
+    let proposal_followers = AcceptDecide {
+        n: ballot,
+        seq_num: SequenceNumber::default(),
+        decided_idx: 0,
+        entries: vec![value.clone()],
+        deadline: d1,
+        id: entry_id,
+        dom_hash: 0,
+    };
+    let proposal_leader = AcceptDecide {
+        n: ballot,
+        seq_num: SequenceNumber::default(),
+        decided_idx: 0,
+        entries: vec![value.clone()],
+        deadline: d2,
+        id: entry_id,
+        dom_hash: 0,
+    };
+
+    // Broadcast D1 to every node except the leader.
+    inject_fast_propose_except(&sys, coordinator, proposal_followers, leader);
+
+    // Deliver D2 only to the leader (simulating the leader's reordered copy).
+    let leader_msg = Message::SequencePaxos(PaxosMessage {
+        from: coordinator,
+        to: leader,
+        msg: PaxosMsg::FastPropose(proposal_leader),
+    });
+    sys.nodes
+        .get(&leader)
+        .unwrap()
+        .on_definition(|x| x.paxos.handle_incoming(leader_msg));
+
+    // Followers release at D1 (hash H1) and send FastAccepted{H1} to the leader.
+    // The leader releases at D2 (hash H2 ≠ H1).  handle_fast_accepted returns
+    // HashMismatch → proactive Decide{H2} sent to each follower →
+    // handle_decide adopts H2 directly (no Phase 1 needed) →
+    // stall recovery decides via slow path → all nodes decide.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
+    }
+
+    // After AcceptSync, every node's dom.last_log_hash must equal the leader's.
+    let leader_hash = get_dom_hash(&sys, leader);
+    for pid in 1..=cfg.num_nodes as NodeId {
+        let h = get_dom_hash(&sys, pid);
+        assert_eq!(
+            h, leader_hash,
+            "node {pid} dom_hash={h:#018x} != leader_hash={leader_hash:#018x} \
+             after hash-mismatch recovery"
+        );
+    }
+
+    print_final_logs(&sys, "hash_mismatch_on_fast_accepted_triggers_recovery");
+    test_end("hash_mismatch_on_fast_accepted_triggers_recovery");
     shutdown(sys);
 }

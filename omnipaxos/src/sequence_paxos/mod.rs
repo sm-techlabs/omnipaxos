@@ -426,7 +426,14 @@ where
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
             // DOM Messages
-            PaxosMsg::FastPropose(payload) => self.dom.handle_fast_propose(payload),
+            // The leader applies deadline-reordering for late entries; followers do not.
+            PaxosMsg::FastPropose(payload) => {
+                if self.state.0 == Role::Leader {
+                    self.dom.handle_fast_propose_leader(payload);
+                } else {
+                    self.dom.handle_fast_propose(payload);
+                }
+            }
             PaxosMsg::FastReply(fast_accept) => self.handle_fast_reply(fast_accept),
             PaxosMsg::Sync(fast_sync) => self.handle_fast_sync(fast_sync),
         }

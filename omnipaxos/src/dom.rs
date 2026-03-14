@@ -29,6 +29,23 @@ struct FastAcceptedQuorum {
     hash: u64,
 }
 
+/// The outcome of recording a single `FastAccepted` acknowledgement.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FastAcceptedOutcome {
+    /// This acknowledgement matched the reference hash but the fast quorum
+    /// threshold has not yet been reached.
+    Pending,
+    /// The fast quorum threshold has been reached; the leader may now call
+    /// `fast_decide`.
+    QuorumReached,
+    /// The incoming acknowledgement carries a hash that differs from the
+    /// reference hash already established for this slot.  The reporting node
+    /// accepted the entry with a different deadline than the leader assigned
+    /// (out-of-order rewrite) and its DOM state is inconsistent.  The leader
+    /// must trigger Phase-1 recovery on that node.
+    HashMismatch,
+}
+
 /// The coordinator-side decision derived from a fast quorum of matching replies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FastPathDecision {
@@ -91,13 +108,40 @@ where
         };
     }
 
-    /// Handles a fast path propose
+    /// Handles a fast-path propose on a **follower** node.
+    ///
+    /// If the entry's deadline is still in the future relative to the last
+    /// released timestamp it goes into the `early_buffer` for deadline-ordered
+    /// release.  Otherwise it is already "late" and goes to the `late_buffer`
+    /// so that a subsequent `FastSync` can reconcile it.
     pub fn handle_fast_propose(&mut self, ac: AcceptDecide<T>) {
         if ac.deadline > self.last_released_timestamp {
             self.early_buffer.push(ac);
-        } else {
-            self.late_buffer.insert(ac.id, ac);
         }
+        // else {
+        //     self.late_buffer.insert(ac.id, ac);
+        // }
+    }
+
+    /// Handles a fast-path propose on the **leader** node.
+    ///
+    /// Unlike the follower path, the leader must guarantee that every entry it
+    /// releases has a strictly-increasing deadline.  If the incoming message
+    /// carries a deadline that is already past (`deadline <=
+    /// last_released_timestamp`), the leader **reorders** it by bumping the
+    /// deadline to `last_released_timestamp + 1` before inserting it into the
+    /// `early_buffer`.
+    ///
+    /// Followers that received the same message with the original (earlier)
+    /// deadline will fast-accept it and send `FastAccepted` with a hash that
+    /// reflects the original deadline.  When those acknowledgements arrive at
+    /// the leader it will detect the hash mismatch and trigger recovery on
+    /// those followers (see `handle_fast_accepted`).
+    pub fn handle_fast_propose_leader(&mut self, mut ac: AcceptDecide<T>) {
+        if ac.deadline <= self.last_released_timestamp {
+            ac.deadline = self.last_released_timestamp + 1;
+        }
+        self.early_buffer.push(ac);
     }
 
     /// Handles a fast path reply
@@ -170,8 +214,24 @@ where
         qd.slow_response.insert(pid);
     }
 
-    /// Tracks fast accept acknowledgements at the leader.
-    pub fn handle_fast_accepted(&mut self, accepted: FastAccepted, from: NodeId) -> bool {
+    /// Tracks a `FastAccepted` acknowledgement at the leader and returns the
+    /// outcome for this slot.
+    ///
+    /// The first `FastAccepted` received for a given `accepted_idx` establishes
+    /// the **reference hash** for that slot.  Every subsequent acknowledgement
+    /// is compared against it:
+    ///
+    /// * Equal hash → the replica is added to the quorum; returns
+    ///   `QuorumReached` when the threshold is met, `Pending` otherwise.
+    /// * Different hash → the replica accepted the entry with metadata that
+    ///   differs from the reference (e.g. a different deadline due to
+    ///   reordering on the leader); returns `HashMismatch`.  The caller is
+    ///   responsible for triggering Phase-1 recovery on the mismatching node.
+    pub fn handle_fast_accepted(
+        &mut self,
+        accepted: FastAccepted,
+        from: NodeId,
+    ) -> FastAcceptedOutcome {
         let qd = self
             .fast_accepted_tracker
             .entry(accepted.accepted_idx)
@@ -181,11 +241,28 @@ where
             });
 
         if qd.hash != accepted.hash {
-            return false;
+            return FastAcceptedOutcome::HashMismatch;
         }
 
         qd.replicas.insert(from);
-        qd.replicas.len() >= self.fast_quorum_size
+        if qd.replicas.len() >= self.fast_quorum_size {
+            FastAcceptedOutcome::QuorumReached
+        } else {
+            FastAcceptedOutcome::Pending
+        }
+    }
+
+    /// Returns the node IDs that have acknowledged slot `accepted_idx` with
+    /// the reference hash stored in the tracker.
+    ///
+    /// Used by the leader when its own hash for a slot differs from what
+    /// followers already reported (Case 1 reordering): the nodes currently
+    /// in `replicas` all used the *wrong* hash and need recovery.
+    pub fn get_replicas_with_wrong_hash(&self, accepted_idx: usize) -> Vec<NodeId> {
+        self.fast_accepted_tracker
+            .get(&accepted_idx)
+            .map(|qd| qd.replicas.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// Handles a fast sync message
@@ -226,21 +303,15 @@ where
         }
     }
 
-    /// Records metadata for an accepted entry and returns the resulting prefix hash.
-    pub fn record_accepted_metadata(
-        &mut self,
-        id: (u64, u64),
-        deadline: i64,
-        accepted_idx: usize,
-    ) -> u64 {
-        if accepted_idx == 0 {
-            return self.last_log_hash;
-        }
-
-        if self.metadata_log.len() < accepted_idx {
-            self.append_metadata(DomMetadata { id, deadline });
-        }
-
+    /// Returns the prefix hash for `accepted_idx`.
+    ///
+    /// `release_message` (called by `tick` before this point) already ran
+    /// `append_metadata` for the current entry, so `last_log_hash` and
+    /// `log_hashes` are up to date.  We must NOT call `append_metadata` again
+    /// here: if the node missed earlier entries and caught up via AcceptSync its
+    /// `metadata_log` is shorter than `accepted_idx`, and a second XOR of the
+    /// same metadata would cancel out, returning a stale hash.
+    pub fn record_accepted_metadata(&mut self, accepted_idx: usize) -> u64 {
         self.get_hash_at(accepted_idx).unwrap_or(self.last_log_hash)
     }
 

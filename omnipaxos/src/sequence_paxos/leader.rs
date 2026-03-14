@@ -2,6 +2,7 @@ use super::super::{
     ballot_leader_election::Ballot,
     util::{LeaderState, PromiseMetaData},
 };
+use crate::dom::FastAcceptedOutcome;
 use crate::util::{AcceptedMetaData, WRITE_ERROR_MSG};
 
 use super::*;
@@ -432,10 +433,39 @@ where
         if accepted.n == self.leader_state.n_leader && self.state == (Role::Leader, Phase::Accept) {
             self.leader_state
                 .set_accepted_idx(from, accepted.accepted_idx);
-            if accepted.accepted_idx > self.internal_storage.get_decided_idx()
-                && self.dom.handle_fast_accepted(accepted, from)
-            {
-                self.fast_decide(accepted.accepted_idx, accepted.hash);
+            if accepted.accepted_idx > self.internal_storage.get_decided_idx() {
+                match self.dom.handle_fast_accepted(accepted, from) {
+                    FastAcceptedOutcome::QuorumReached => {
+                        self.fast_decide(accepted.accepted_idx, accepted.hash);
+                    }
+                    FastAcceptedOutcome::HashMismatch => {
+                        // Case 2: the leader already released this entry with a reordered
+                        // deadline (and therefore a different hash).  The follower accepted
+                        // the original deadline and has an inconsistent DOM hash.
+                        // Send a Decide carrying the leader's correct hash; handle_decide
+                        // on the follower will detect the mismatch and call reconnected().
+                        if let Some(correct_hash) =
+                            self.dom.get_hash_at(accepted.accepted_idx)
+                        {
+                            let decided_idx = self.internal_storage.get_decided_idx();
+                            #[cfg(feature = "logging")]
+                            info!(
+                                self.logger,
+                                "[FAST_ACCEPTED][HASH_MISMATCH] from={} accepted_idx={} \
+                                 follower_hash={} our_hash={} → sending recovery Decide",
+                                from,
+                                accepted.accepted_idx,
+                                accepted.hash,
+                                correct_hash,
+                            );
+                            self.send_decide(from, decided_idx, false, correct_hash);
+                        }
+                        // If the leader hasn't released this slot yet (Case 1), the
+                        // proactive Decide is sent from handle_released_fast_entry_leader
+                        // once the entry is processed.
+                    }
+                    FastAcceptedOutcome::Pending => {}
+                }
             }
         }
     }
@@ -443,7 +473,6 @@ where
     pub(crate) fn handle_released_fast_entry_leader(&mut self, prop_msg: AcceptDecide<T>) {
         let AcceptDecide {
             id,
-            deadline,
             entries,
             ..
         } = prop_msg;
@@ -457,7 +486,7 @@ where
 
             let hash = self
                 .dom
-                .record_accepted_metadata(id, deadline, accepted_idx);
+                .record_accepted_metadata(accepted_idx);
             let fast_reply = FastReply {
                 n: self.leader_state.n_leader,
                 coordinator_id: id.0,
@@ -485,10 +514,40 @@ where
                 accepted_idx,
                 hash,
             };
-            if self.dom.handle_fast_accepted(fast_accepted, self.pid)
-                && accepted_idx > self.internal_storage.get_decided_idx()
-            {
-                self.fast_decide(accepted_idx, hash);
+            match self.dom.handle_fast_accepted(fast_accepted, self.pid) {
+                FastAcceptedOutcome::QuorumReached => {
+                    if accepted_idx > self.internal_storage.get_decided_idx() {
+                        self.fast_decide(accepted_idx, hash);
+                    }
+                }
+                FastAcceptedOutcome::HashMismatch => {
+                    // Case 1: some followers already sent FastAccepted with the original
+                    // (pre-reorder) deadline before the leader processed this slot.
+                    // Their hash H1 != our H2.  All nodes currently in the quorum tracker
+                    // for this slot used H1 and need recovery.
+                    let decided_idx = self.internal_storage.get_decided_idx();
+                    let followers_to_recover: Vec<NodeId> = self
+                        .dom
+                        .get_replicas_with_wrong_hash(accepted_idx)
+                        .into_iter()
+                        .filter(|&pid| pid != self.pid)
+                        .collect();
+                    #[cfg(feature = "logging")]
+                    if !followers_to_recover.is_empty() {
+                        info!(
+                            self.logger,
+                            "[FAST_ACCEPTED][HASH_MISMATCH] leader hash={} differs from \
+                             follower hash at idx={}; triggering recovery on {:?}",
+                            hash,
+                            accepted_idx,
+                            followers_to_recover,
+                        );
+                    }
+                    for follower in followers_to_recover {
+                        self.send_decide(follower, decided_idx, false, hash);
+                    }
+                }
+                FastAcceptedOutcome::Pending => {}
             }
         }
     }

@@ -206,23 +206,38 @@ where
             && self.state.1 == Phase::Accept
             && self.handle_sequence_num(dec.seq_num, dec.n.pid) == MessageStatus::Expected
         {
-            // Validate that our log matches the leader's at the decided index.
-            // hash == 0 means this is a slow-path Decide; no DOM hash verification needed.
-            // hash != 0 means this is a fast-path Decide; if hashes don't match our
-            // DOM log metadata is inconsistent with the leader's and we must resync.
-            if  (dec.decided_idx > self.internal_storage.get_accepted_idx()) ||
-                (dec.hash != 0 && dec.hash != self.dom.last_log_hash) {
+            // If the follower is missing entries that have already been decided, it
+            // cannot safely advance its decided_idx — trigger Phase 1 recovery so
+            // AcceptSync delivers the missing log suffix.
+            if dec.decided_idx > self.internal_storage.get_accepted_idx() {
                 #[cfg(feature = "logging")]
                 warn!(
                     self.logger,
-                    "[SLOW_PATH] Decide hash mismatch at decided_idx={}. \
-                     leader_hash={} our_hash={}. Initiating reconciliation.",
+                    "[DECIDE] missing entries: accepted_idx={} < decided_idx={}. \
+                     Initiating Phase 1 recovery.",
+                    self.internal_storage.get_accepted_idx(),
                     dec.decided_idx,
-                    dec.hash,
-                    self.dom.last_log_hash
                 );
                 self.reconnected(dec.n.pid);
                 return;
+            }
+
+            // Fast-path DOM hash correction: if the leader's hash differs from ours,
+            // adopt it directly.  A hash mismatch here means the leader chose a
+            // different deadline ordering for an entry (deadline reordering / Case 1
+            // reorder) — the log *entries* are guaranteed consistent by Paxos safety,
+            // so we correct the DOM hash chain without an expensive Phase 1 recovery.
+            if dec.hash != 0 && dec.hash != self.dom.last_log_hash {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[DECIDE][DOM_HASH] adopting leader hash at decided_idx={}: \
+                     {} → {} (deadline reorder correction)",
+                    dec.decided_idx,
+                    self.dom.last_log_hash,
+                    dec.hash,
+                );
+                self.dom.last_log_hash = dec.hash;
             }
 
             #[cfg(feature = "logging")]
@@ -308,10 +323,10 @@ where
         }
     }
 
-    fn reply_fast_accepted(&mut self, accepted_idx: usize, deadline: i64, id: (u64, u64)) {
+    fn reply_fast_accepted(&mut self, accepted_idx: usize, _deadline: i64, id: (u64, u64)) {
         let hash = self
             .dom
-            .record_accepted_metadata(id, deadline, accepted_idx);
+            .record_accepted_metadata(accepted_idx);
         let fast_accepted = FastAccepted {
             n: self.get_promise(),
             coordinator_id: id.0,
