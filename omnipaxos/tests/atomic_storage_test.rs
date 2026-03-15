@@ -296,6 +296,7 @@ fn atomic_storage_trim_test() {
                 deadline: 0,
                 id: (0, 0),
                 dom_hash: 0,
+            prev_idx: 0,
             }),
         });
         op.handle_incoming(setup_msg);
@@ -363,6 +364,7 @@ fn atomic_storage_snapshot_test() {
                 deadline: 0,
                 id: (0, 0),
                 dom_hash: 0,
+            prev_idx: 0,
             }),
         });
         op.handle_incoming(setup_msg);
@@ -444,6 +446,7 @@ fn atomic_storage_accept_decide_test() {
                 deadline: 0,
                 id: (0, 0),
                 dom_hash: 0,
+            prev_idx: 0,
             }),
         });
         let _res = catch_unwind(AssertUnwindSafe(|| op.handle_incoming(msg.clone())));
