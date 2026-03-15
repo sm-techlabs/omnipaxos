@@ -459,6 +459,13 @@ impl Quorum {
             Quorum::Flexible(flex_quorum) => num_nodes >= flex_quorum.write_quorum_size,
         }
     }
+
+    pub(crate) fn accept_quorum_size(&self) -> usize {
+        match self {
+            Quorum::Majority(majority) => *majority,
+            Quorum::Flexible(flex_quorum) => flex_quorum.write_quorum_size,
+        }
+    }
 }
 
 /// The entries flushed due to an append operation

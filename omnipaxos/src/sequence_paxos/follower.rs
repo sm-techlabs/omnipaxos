@@ -142,11 +142,12 @@ where
                 #[cfg(feature = "logging")]
                 warn!(
                     self.logger,
-                    "[FAST_PATH] stale log: accepted_idx={} < decided_idx={} coordinator={} \
-                     → discarding fast-path entry and triggering recovery",
+                    "[FAST_PATH] stale log: accepted_idx={} < decided_idx={} \
+                     coordinator={} request={} → discarding fast-path entry and triggering recovery",
                     self.internal_storage.get_accepted_idx(),
                     decided_idx,
-                    n.pid,
+                    acc_dec.id.0,
+                    acc_dec.id.1,
                 );
                 self.reconnected(n.pid);
                 return;
@@ -163,7 +164,10 @@ where
                     #[cfg(feature = "logging")]
                     info!(
                         self.logger,
-                        "[ACCEPT_DECIDE][IDEMPOTENT] skipping duplicate: my_idx={} entries=[{}..{}]",
+                        "[ACCEPT_DECIDE][IDEMPOTENT] skipping duplicate: coordinator={} request={} \
+                         my_idx={} entries=[{}..{}]",
+                        acc_dec.id.0,
+                        acc_dec.id.1,
                         my_idx,
                         acc_dec.prev_idx,
                         entries_end,
@@ -177,8 +181,11 @@ where
                     #[cfg(feature = "logging")]
                     info!(
                         self.logger,
-                        "[ACCEPT_DECIDE][IDEMPOTENT] trimming {} already-appended entries: my_idx={} prev_idx={}",
+                        "[ACCEPT_DECIDE][IDEMPOTENT] trimming {} already-appended entries: \
+                         coordinator={} request={} my_idx={} prev_idx={}",
                         skip,
+                        acc_dec.id.0,
+                        acc_dec.id.1,
                         my_idx,
                         acc_dec.prev_idx,
                     );
@@ -206,7 +213,10 @@ where
                 #[cfg(feature = "logging")]
                 info!(
                     self.logger,
-                    "[RECV][ACCEPT_DECIDE] accepted_idx={} decided_idx={} fast_path={}",
+                    "[RECV][ACCEPT_DECIDE] coordinator={} request={} accepted_idx={} \
+                     decided_idx={} fast_path={}",
+                    id.0,
+                    id.1,
                     idx,
                     decided_idx,
                     is_from_early_buffer,
@@ -381,8 +391,9 @@ where
         #[cfg(feature = "logging")]
         info!(
             self.logger,
-            "[SEND][FAST_ACCEPTED] to={} request={} accepted_idx={} hash={}",
+            "[SEND][FAST_ACCEPTED] to={} coordinator={} request={} accepted_idx={} hash={}",
             self.get_current_leader(),
+            id.0,
             id.1,
             accepted_idx,
             hash,

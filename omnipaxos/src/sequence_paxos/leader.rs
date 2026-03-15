@@ -396,19 +396,25 @@ where
     }
 
     pub(crate) fn handle_accepted(&mut self, accepted: Accepted, from: NodeId) {
-        #[cfg(feature = "logging")]
-        info!(
-            self.logger,
-            "[RECV][ACCEPTED] from={} accepted_idx={} decided_idx={} quorum_progress={}/{}",
-            from,
-            accepted.accepted_idx,
-            self.internal_storage.get_decided_idx(),
-            self.leader_state.accepted_indexes.iter().filter(|&&a| a >= accepted.accepted_idx).count(),
-            self.leader_state.accepted_indexes.len(),
-        );
         if accepted.n == self.leader_state.n_leader && self.state == (Role::Leader, Phase::Accept) {
             self.leader_state
                 .set_accepted_idx(from, accepted.accepted_idx);
+            #[cfg(feature = "logging")]
+            {
+                let count = self.leader_state.accepted_indexes.iter()
+                    .filter(|&&a| a >= accepted.accepted_idx)
+                    .count();
+                let quorum_size = self.leader_state.quorum.accept_quorum_size();
+                info!(
+                    self.logger,
+                    "[RECV][ACCEPTED] from={} accepted_idx={} decided_idx={} quorum_progress={}/{}",
+                    from,
+                    accepted.accepted_idx,
+                    self.internal_storage.get_decided_idx(),
+                    count,
+                    quorum_size,
+                );
+            }
             if accepted.accepted_idx > self.internal_storage.get_decided_idx()
                 && self.leader_state.is_chosen(accepted.accepted_idx)
             {
@@ -451,6 +457,17 @@ where
             if accepted.accepted_idx > self.internal_storage.get_decided_idx() {
                 match self.dom.handle_fast_accepted(accepted, from) {
                     FastAcceptedOutcome::QuorumReached => {
+                        #[cfg(feature = "logging")]
+                        info!(
+                            self.logger,
+                            "[FAST_ACCEPTED][QUORUM] coordinator={} request={} accepted_idx={} \
+                             fast_quorum_reached={}/{}",
+                            accepted.coordinator_id,
+                            accepted.request_id,
+                            accepted.accepted_idx,
+                            self.dom.fast_accepted_count(accepted.accepted_idx),
+                            self.dom.fast_accepted_quorum_size(),
+                        );
                         self.fast_decide(accepted.accepted_idx, accepted.hash);
                     }
                     FastAcceptedOutcome::HashMismatch => {
@@ -465,8 +482,11 @@ where
                             #[cfg(feature = "logging")]
                             info!(
                                 self.logger,
-                                "[FAST_ACCEPTED][HASH_MISMATCH] from={} accepted_idx={} \
-                                 follower_hash={} our_hash={} → sending recovery Decide",
+                                "[FAST_ACCEPTED][HASH_MISMATCH] coordinator={} request={} \
+                                 from={} accepted_idx={} follower_hash={} our_hash={} \
+                                 → sending recovery Decide",
+                                accepted.coordinator_id,
+                                accepted.request_id,
                                 from,
                                 accepted.accepted_idx,
                                 accepted.hash,
@@ -478,7 +498,19 @@ where
                         // proactive Decide is sent from handle_released_fast_entry_leader
                         // once the entry is processed.
                     }
-                    FastAcceptedOutcome::Pending => {}
+                    FastAcceptedOutcome::Pending => {
+                        #[cfg(feature = "logging")]
+                        info!(
+                            self.logger,
+                            "[FAST_ACCEPTED][QUORUM] coordinator={} request={} accepted_idx={} \
+                             pending={}/{}",
+                            accepted.coordinator_id,
+                            accepted.request_id,
+                            accepted.accepted_idx,
+                            self.dom.fast_accepted_count(accepted.accepted_idx),
+                            self.dom.fast_accepted_quorum_size(),
+                        );
+                    }
                 }
             }
         }
@@ -551,8 +583,11 @@ where
                     if !followers_to_recover.is_empty() {
                         info!(
                             self.logger,
-                            "[FAST_ACCEPTED][HASH_MISMATCH] leader hash={} differs from \
-                             follower hash at idx={}; triggering recovery on {:?}",
+                            "[FAST_ACCEPTED][HASH_MISMATCH] coordinator={} request={} \
+                             leader hash={} differs from follower hash at accepted_idx={}; \
+                             triggering recovery on {:?}",
+                            id.0,
+                            id.1,
                             hash,
                             accepted_idx,
                             followers_to_recover,

@@ -396,6 +396,19 @@ where
         1 + ((3 * non_leader_nodes + 3) / 4)
     }
 
+    /// Returns how many replicas have acknowledged slot `accepted_idx` so far.
+    pub fn fast_accepted_count(&self, accepted_idx: usize) -> usize {
+        self.fast_accepted_tracker
+            .get(&accepted_idx)
+            .map(|qd| qd.replicas.len())
+            .unwrap_or(0)
+    }
+
+    /// Returns the fast-quorum threshold for this cluster.
+    pub fn fast_accepted_quorum_size(&self) -> usize {
+        self.fast_quorum_size
+    }
+
     /// Fill `log_hashes` and `metadata_log` with placeholder slow-path entries
     /// up to `accepted_idx` positions, using the current `last_log_hash` as
     /// the fill value.  Must be called after slow-path (non-DOM) entries are
