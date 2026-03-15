@@ -193,6 +193,14 @@ where
         } else {
             followers_decided_idx
         };
+        // Drain any DOM entries whose deadline has now passed so the suffix we
+        // build below includes them.  Without this, a pending entry that was
+        // accepted after the last tick() but before this AcceptSync would be
+        // missing from the suffix; the recovering follower would enter Accept
+        // with a stale accepted_idx and immediately need another recovery cycle.
+        while let Some(prop_msg) = self.dom.release_message() {
+            self.handle_released_fast_entry_leader(prop_msg);
+        }
         let log_sync = self.create_log_sync(followers_valid_entries_idx, followers_decided_idx);
         self.leader_state.increment_seq_num_session(to);
         let acc_sync = AcceptSync {

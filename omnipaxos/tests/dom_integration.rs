@@ -481,14 +481,29 @@ fn divergent_logs_reconcile_via_slow_path() {
         .wait_timeout(cfg.wait_timeout)
         .expect("v3 did not decide on coordinator in time");
 
-    // Verify all nodes decided exactly [v1, v2, v3] in that order.
-    // ValueSnapshot preserves entry order so read_decided_values handles
-    // snapshotted entries correctly.  v1 and v2 are sequential proposals
-    // from the same coordinator, giving v1.deadline < v2.deadline, so DOM
-    // always releases them in order.
-    let expected = vec![v1, v2, v3];
+    // v3 is always last (appended after v1/v2 are decided).  v1 and v2 may
+    // appear in either order depending on which deadline the simulated clock
+    // assigned: a backward clock jump between the two proposals can give
+    // v2.deadline < v1.deadline, causing DOM to release v2 first.  All nodes
+    // must converge to the same order — read it from the coordinator as the
+    // reference.
+    let reference: Vec<Value> = {
+        let mut r = Vec::new();
+        wait_until(cfg.wait_timeout, || {
+            r = read_decided_values(&sys, coordinator);
+            r.len() >= 3
+        });
+        r
+    };
+    assert_eq!(reference[2], v3, "v3 must be the third decided value");
+    assert!(
+        (reference[0] == v1 && reference[1] == v2)
+            || (reference[0] == v2 && reference[1] == v1),
+        "first two decided values must be {{v1, v2}} in some order, got {:?}",
+        &reference[..2]
+    );
     for pid in 1..=cfg.num_nodes as NodeId {
-        wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
+        wait_for_decided_values(&sys, pid, &reference, cfg.wait_timeout);
     }
 
     print_final_logs(&sys, "divergent_logs_reconcile_via_slow_path");
