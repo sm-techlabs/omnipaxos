@@ -1380,6 +1380,583 @@ fn hash_mismatch_on_fast_accepted_triggers_recovery() {
     test_end("hash_mismatch_on_fast_accepted_triggers_recovery");
 }
 
+/// Fault tolerance — leader crashes while fast-path entries are in-flight.
+///
+/// N=7, fast_quorum=6.  Three coordinators each submit an entry.  After a
+/// short propagation window the current leader is killed before the resend
+/// timer has had a chance to fire slow-path fallback for all three entries.
+///
+/// The remaining 6 nodes must:
+///   1. Detect the missing leader heartbeats (BLE timeout).
+///   2. Elect a new leader.
+///   3. Run Phase 1 (Prepare/Promise) to discover any accepted-but-undecided
+///      entries left by the crashed leader.
+///   4. Deliver those entries to every node via AcceptSync/AcceptDecide.
+///   5. Decide all 3 entries on all 6 surviving nodes.
+///
+/// This validates that the safety property "every accepted entry is eventually
+/// decided" holds even when the leader fails mid-stream.
+#[test]
+#[serial]
+fn leader_crash_pending_fast_path_entries_decided() {
+    test_begin("leader_crash_pending_fast_path_entries_decided");
+    let cfg = dom_default_testcfg(None); // N=7
+    let mut sys = TestGuard::new(
+        TestSystem::with(cfg),
+        "leader_crash_pending_fast_path_entries_decided",
+    );
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+
+    // Wait for all nodes to reach Phase::Accept so proposals go via fast path.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((_, true)))
+            })
+        });
+    }
+
+    // Pick 3 non-leader coordinators.
+    let mut non_leaders: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&p| p != leader)
+        .take(3)
+        .collect();
+    let c1 = non_leaders.remove(0);
+    let c2 = non_leaders.remove(0);
+    let c3 = non_leaders.remove(0);
+
+    let v1 = Value::with_id(4000);
+    let v2 = Value::with_id(4001);
+    let v3 = Value::with_id(4002);
+
+    // Submit all three entries.
+    for (coord, val) in [(c1, v1.clone()), (c2, v2.clone()), (c3, v3.clone())] {
+        sys.nodes.get(&coord).unwrap().on_definition(|x| {
+            x.paxos.append(val).expect("append should succeed");
+        });
+    }
+
+    // Let FastPropose messages propagate before killing the leader.
+    sleep(Duration::from_millis(50));
+    sys.kill_node(leader);
+
+    // The 6 remaining nodes run BLE → new leader elected → Phase 1 recovery
+    // → AcceptSync delivers all pending entries → all 6 decide.
+    let active: Vec<NodeId> = sys.nodes.keys().copied().collect();
+    for pid in &active {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(pid).unwrap().on_definition(|x| {
+                x.paxos.get_decided_idx() >= 3
+            })
+        });
+        let decided = read_decided_values(&sys, *pid);
+        assert_eq!(decided.len(), 3, "node {pid} should have 3 decided entries");
+        assert!(decided.contains(&v1), "node {pid} missing v1");
+        assert!(decided.contains(&v2), "node {pid} missing v2");
+        assert!(decided.contains(&v3), "node {pid} missing v3");
+    }
+
+    test_end("leader_crash_pending_fast_path_entries_decided");
+}
+
+/// Fault tolerance — rolling leader failures: the cluster elects two new
+/// leaders in sequence and continues making progress after each failure.
+///
+/// N=7.  The test proceeds in three epochs:
+///
+///   Epoch 1: all 7 nodes.  Submit E1 via C1, wait for all 7 to decide.
+///            Then kill leader L1 → 6 nodes remain.
+///
+///   Epoch 2: 6 nodes.  New leader L2 elected.  Submit E2 via a surviving
+///            coordinator, wait for all 6 to decide.
+///            Then kill L2 → 5 nodes remain.
+///
+///   Epoch 3: 5 nodes.  New leader L3 elected.  Submit E3 via a surviving
+///            coordinator, wait for all 5 to decide.
+///
+/// At the end every surviving node must have decided [E1, E2, E3] (exact
+/// content, in submission order — each entry is submitted only after the
+/// previous one is fully decided so the order is deterministic).
+///
+/// Majority quorum for N=7 is 4.  With 5 nodes remaining in epoch 3 there
+/// is sufficient overlap to maintain safety and liveness.
+#[test]
+#[serial]
+fn rolling_leader_failures_cluster_survives() {
+    test_begin("rolling_leader_failures_cluster_survives");
+    let cfg = dom_default_testcfg(None); // N=7
+    let mut sys = TestGuard::new(
+        TestSystem::with(cfg),
+        "rolling_leader_failures_cluster_survives",
+    );
+    sys.start_all_nodes();
+
+    // ── Epoch 1: all 7 nodes ─────────────────────────────────────────────────
+    let l1 = sys.get_elected_leader(1, cfg.wait_timeout);
+    // Wait for accept phase on all nodes.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((_, true)))
+            })
+        });
+    }
+    let c1 = (1..=cfg.num_nodes as NodeId)
+        .find(|&p| p != l1)
+        .expect("c1");
+    let e1 = Value::with_id(4100);
+    let (kp1, kf1) = promise::<()>();
+    sys.nodes.get(&c1).unwrap().on_definition(|x| {
+        x.insert_decided_future(Ask::new(kp1, e1.clone()));
+        x.paxos.append(e1.clone()).expect("append e1");
+    });
+    kf1.wait_timeout(cfg.wait_timeout).expect("e1 not decided");
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_for_decided_values(&sys, pid, &[e1.clone()], cfg.wait_timeout);
+    }
+
+    sys.kill_node(l1);
+
+    // ── Epoch 2: 6 nodes ─────────────────────────────────────────────────────
+    // Poll until any surviving node sees a new leader that is not l1.
+    let observer2 = *sys.nodes.keys().next().unwrap();
+    wait_until(cfg.wait_timeout, || {
+        sys.nodes.get(&observer2).unwrap().on_definition(|x| {
+            matches!(x.paxos.get_current_leader(), Some((ldr, _)) if ldr != l1)
+        })
+    });
+    let l2 = sys.nodes.get(&observer2).unwrap().on_definition(|x| {
+        x.paxos.get_current_leader().map(|(ldr, _)| ldr).unwrap()
+    });
+    // Wait for all surviving nodes to reach Phase::Accept under l2.
+    for pid in sys.nodes.keys().copied().collect::<Vec<_>>() {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((ldr, true)) if ldr == l2)
+            })
+        });
+    }
+    let c2 = sys
+        .nodes
+        .keys()
+        .copied()
+        .find(|&p| p != l2)
+        .expect("c2");
+    let e2 = Value::with_id(4101);
+    let (kp2, kf2) = promise::<()>();
+    sys.nodes.get(&c2).unwrap().on_definition(|x| {
+        x.insert_decided_future(Ask::new(kp2, e2.clone()));
+        x.paxos.append(e2.clone()).expect("append e2");
+    });
+    kf2.wait_timeout(cfg.wait_timeout).expect("e2 not decided");
+    for pid in sys.nodes.keys().copied().collect::<Vec<_>>() {
+        wait_until(cfg.wait_timeout, || {
+            read_decided_values(&sys, pid).len() >= 2
+        });
+    }
+
+    sys.kill_node(l2);
+
+    // ── Epoch 3: 5 nodes ─────────────────────────────────────────────────────
+    let observer3 = *sys.nodes.keys().next().unwrap();
+    wait_until(cfg.wait_timeout, || {
+        sys.nodes.get(&observer3).unwrap().on_definition(|x| {
+            matches!(x.paxos.get_current_leader(), Some((ldr, _)) if ldr != l1 && ldr != l2)
+        })
+    });
+    let l3 = sys.nodes.get(&observer3).unwrap().on_definition(|x| {
+        x.paxos.get_current_leader().map(|(ldr, _)| ldr).unwrap()
+    });
+    for pid in sys.nodes.keys().copied().collect::<Vec<_>>() {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((ldr, true)) if ldr == l3)
+            })
+        });
+    }
+    let c3 = sys
+        .nodes
+        .keys()
+        .copied()
+        .find(|&p| p != l3)
+        .expect("c3");
+    let e3 = Value::with_id(4102);
+    let (kp3, kf3) = promise::<()>();
+    sys.nodes.get(&c3).unwrap().on_definition(|x| {
+        x.insert_decided_future(Ask::new(kp3, e3.clone()));
+        x.paxos.append(e3.clone()).expect("append e3");
+    });
+    kf3.wait_timeout(cfg.wait_timeout).expect("e3 not decided");
+
+    // All 5 surviving nodes must have decided all three entries.
+    // Exact order: e1 then e2 then e3 (each submitted after the previous decided).
+    let expected = vec![e1, e2, e3];
+    for pid in sys.nodes.keys().copied().collect::<Vec<_>>() {
+        wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
+    }
+
+    test_end("rolling_leader_failures_cluster_survives");
+}
+
+/// Fault tolerance — all coordinators crash after submitting; the leader and
+/// remaining followers decide via the slow path with a reduced live set.
+///
+/// N=7, fast_quorum=6.  Three non-leader coordinators each submit an entry,
+/// then all three are killed after a propagation window.  Only 4 nodes remain
+/// (the leader + 3 other followers).  The fast quorum of 6 can never be
+/// reached, but the majority quorum (4/7) is still satisfied by the 4
+/// survivors.
+///
+/// Expected outcome:
+///   - The DOM deadline expires on the 4 surviving nodes; they release the
+///     entries from their early buffers and send FastAccepted to the leader.
+///   - Only 4 FastAccepted arrive (< fast_quorum=6) → fast path stalls.
+///   - The resend timer detects the stall (regular quorum = 4 ≥ majority = 4)
+///     and decides via the slow path.
+///   - All 4 surviving nodes commit all 3 entries.
+#[test]
+#[serial]
+fn all_coordinators_crash_slow_path_decides() {
+    test_begin("all_coordinators_crash_slow_path_decides");
+    let cfg = dom_default_testcfg(None); // N=7
+    let mut sys = TestGuard::new(
+        TestSystem::with(cfg),
+        "all_coordinators_crash_slow_path_decides",
+    );
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+
+    // Wait for all nodes to reach Phase::Accept.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((_, true)))
+            })
+        });
+    }
+
+    // Pick 3 non-leader coordinators to kill.
+    let doomed: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&p| p != leader)
+        .take(3)
+        .collect();
+
+    let v1 = Value::with_id(4200);
+    let v2 = Value::with_id(4201);
+    let v3 = Value::with_id(4202);
+
+    for (coord, val) in doomed.iter().copied().zip([v1.clone(), v2.clone(), v3.clone()]) {
+        sys.nodes.get(&coord).unwrap().on_definition(|x| {
+            x.paxos.append(val).expect("append should succeed");
+        });
+    }
+
+    // Let FastPropose reach all 7 nodes before killing the coordinators.
+    sleep(Duration::from_millis(60));
+    for coord in &doomed {
+        sys.kill_node(*coord);
+    }
+
+    // The 4 surviving nodes release entries from DOM buffers, send
+    // FastAccepted to the leader (4 < fast_quorum=6 → stall), then the
+    // resend timer fires the slow-path fallback.  Regular quorum 4/7 is met.
+    let survivors: Vec<NodeId> = sys.nodes.keys().copied().collect();
+    assert_eq!(survivors.len(), 4, "expected 4 surviving nodes");
+    for pid in &survivors {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(pid).unwrap().on_definition(|x| {
+                x.paxos.get_decided_idx() >= 3
+            })
+        });
+        let decided = read_decided_values(&sys, *pid);
+        assert_eq!(decided.len(), 3, "node {pid} should have 3 decided entries");
+        assert!(decided.contains(&v1), "node {pid} missing v1");
+        assert!(decided.contains(&v2), "node {pid} missing v2");
+        assert!(decided.contains(&v3), "node {pid} missing v3");
+    }
+
+    test_end("all_coordinators_crash_slow_path_decides");
+}
+
+/// Fault tolerance — coordinator crashes after submitting, then the leader
+/// crashes before deciding.  A new leader is elected and must recover the
+/// pending entry via Phase 1.
+///
+/// N=7.  The scenario has two successive failures:
+///
+///   1. Coordinator C1 submits entry E1 and is killed after propagation.
+///      The leader has E1 in its DOM buffer (or already accepted it) but has
+///      not yet triggered the resend-timer slow path.
+///
+///   2. The leader is killed.  At least some followers have E1 as Undecided
+///      in their logs.
+///
+///   3. A new leader is elected from the 5 remaining nodes.  Its Prepare phase
+///      discovers E1 as the highest accepted-but-undecided entry and delivers
+///      it via AcceptSync to any node that missed it.
+///
+///   4. A second entry E2 is submitted via a surviving coordinator after the
+///      new leader reaches Phase::Accept.  All 5 nodes must eventually decide
+///      both E1 and E2.
+///
+/// This tests the critical safety property: an entry accepted by a quorum
+/// before a leader failure must not be lost.
+#[test]
+#[serial]
+fn coordinator_and_leader_crash_new_leader_reconciles() {
+    test_begin("coordinator_and_leader_crash_new_leader_reconciles");
+    let cfg = dom_default_testcfg(None); // N=7
+    let mut sys = TestGuard::new(
+        TestSystem::with(cfg),
+        "coordinator_and_leader_crash_new_leader_reconciles",
+    );
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+
+    // Wait for all nodes to reach Phase::Accept.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((_, true)))
+            })
+        });
+    }
+
+    // Pick a coordinator that is neither the leader.
+    let c1 = (1..=cfg.num_nodes as NodeId)
+        .find(|&p| p != leader)
+        .expect("c1");
+    let e1 = Value::with_id(4300);
+
+    // Submit E1 then kill the coordinator.
+    sys.nodes.get(&c1).unwrap().on_definition(|x| {
+        x.paxos.append(e1.clone()).expect("append e1");
+    });
+    sleep(Duration::from_millis(60));
+    sys.kill_node(c1);
+
+    // Now kill the leader before the resend timer fires.
+    // (Sleep a bit so E1 has propagated to most followers' DOM buffers.)
+    sleep(Duration::from_millis(20));
+    sys.kill_node(leader);
+
+    // Wait for a new leader to be elected and reach Phase::Accept.
+    let observer = *sys.nodes.keys().next().unwrap();
+    wait_until(cfg.wait_timeout, || {
+        sys.nodes.get(&observer).unwrap().on_definition(|x| {
+            matches!(x.paxos.get_current_leader(), Some((ldr, _)) if ldr != leader)
+        })
+    });
+    let l2 = sys.nodes.get(&observer).unwrap().on_definition(|x| {
+        x.paxos.get_current_leader().map(|(ldr, _)| ldr).unwrap()
+    });
+    for pid in sys.nodes.keys().copied().collect::<Vec<_>>() {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((ldr, true)) if ldr == l2)
+            })
+        });
+    }
+
+    // Submit a fresh entry E2 via any surviving non-leader coordinator.
+    let c2 = sys
+        .nodes
+        .keys()
+        .copied()
+        .find(|&p| p != l2)
+        .expect("c2");
+    let e2 = Value::with_id(4301);
+    let (kp2, kf2) = promise::<()>();
+    sys.nodes.get(&c2).unwrap().on_definition(|x| {
+        x.insert_decided_future(Ask::new(kp2, e2.clone()));
+        x.paxos.append(e2.clone()).expect("append e2");
+    });
+    kf2.wait_timeout(cfg.wait_timeout).expect("e2 not decided");
+
+    // All 5 surviving nodes must have decided E1 (recovered) and E2.
+    // E1 is always before E2 because E2 was submitted after the new leader
+    // reached Accept phase, which happens after E1 was reconciled.
+    for pid in sys.nodes.keys().copied().collect::<Vec<_>>() {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                x.paxos.get_decided_idx() >= 2
+            })
+        });
+        let decided = read_decided_values(&sys, pid);
+        assert_eq!(decided.len(), 2, "node {pid} should have 2 decided entries");
+        assert!(decided.contains(&e1), "node {pid} is missing E1 (lost after dual failure)");
+        assert!(decided.contains(&e2), "node {pid} is missing E2");
+    }
+
+    test_end("coordinator_and_leader_crash_new_leader_reconciles");
+}
+
+/// Fault tolerance — a minority partition is isolated during fast-path
+/// activity, then the leader in the majority partition crashes.  After a new
+/// leader is elected in the majority partition and the minority is reconnected,
+/// the whole cluster must converge to the same log.
+///
+/// N=7.  Timeline:
+///
+///   1. Partition: nodes {isolated1, isolated2} are cut off from everyone else.
+///      The 5-node majority can still decide (fast_quorum=6 is gone, but
+///      majority quorum 4/7 is met by the 5 active nodes for slow path).
+///
+///   2. Two entries E1 and E2 are submitted by coordinators in the majority
+///      partition.  The slow path is forced (only 5 nodes → < fast_quorum=6).
+///      Both are decided on the 5 majority nodes.
+///
+///   3. The current leader (in the majority partition) is killed.
+///      4 majority nodes remain.  A new leader is elected.
+///
+///   4. The minority partition is reconnected (2 isolated nodes rejoin).
+///      A fresh entry E3 is submitted.  The new leader's AcceptSync brings
+///      the isolated nodes' logs up to date.
+///
+///   5. All 6 surviving nodes decide [E1, E2, E3].
+///
+/// This exercises: partition tolerance + leader failure + log reconciliation
+/// across a reconnected minority, all in a single test.
+#[test]
+#[serial]
+fn partition_then_leader_crash_minority_rejoins() {
+    test_begin("partition_then_leader_crash_minority_rejoins");
+    let cfg = dom_default_testcfg(None); // N=7
+    let mut sys = TestGuard::new(
+        TestSystem::with(cfg),
+        "partition_then_leader_crash_minority_rejoins",
+    );
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+
+    // Wait for all nodes to reach Phase::Accept.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((_, true)))
+            })
+        });
+    }
+
+    // Isolate 2 non-leader nodes.
+    let minority: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&p| p != leader)
+        .take(2)
+        .collect();
+    let (iso1, iso2) = (minority[0], minority[1]);
+    sys.set_node_connections(iso1, false);
+    sys.set_node_connections(iso2, false);
+
+    // Pick 2 coordinators from the 5-node majority (not the leader).
+    let majority: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&p| p != leader && p != iso1 && p != iso2)
+        .collect();
+    let coord_a = majority[0];
+    let coord_b = majority[1];
+
+    let e1 = Value::with_id(4400);
+    let e2 = Value::with_id(4401);
+
+    // Submit E1 and E2 in the majority partition and wait for them to be
+    // decided on all 5 majority nodes.  Fast quorum=6 cannot be met (only 5
+    // nodes connected), so the slow path decides both entries.
+    coordinator_append(&sys, coord_a, e1.clone());
+    coordinator_append(&sys, coord_b, e2.clone());
+    let majority_pids: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&p| p != iso1 && p != iso2)
+        .collect();
+    for pid in &majority_pids {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(pid).unwrap().on_definition(|x| {
+                x.paxos.get_decided_idx() >= 2
+            })
+        });
+    }
+
+    // Kill the current leader within the majority.
+    sys.kill_node(leader);
+
+    // Wait for a new leader among the 4 remaining majority nodes.
+    let observer = majority_pids
+        .iter()
+        .find(|&&p| p != leader)
+        .copied()
+        .expect("observer");
+    wait_until(cfg.wait_timeout, || {
+        sys.nodes.get(&observer).unwrap().on_definition(|x| {
+            matches!(x.paxos.get_current_leader(), Some((ldr, _)) if ldr != leader)
+        })
+    });
+    let l2 = sys.nodes.get(&observer).unwrap().on_definition(|x| {
+        x.paxos.get_current_leader().map(|(ldr, _)| ldr).unwrap()
+    });
+    for pid in sys.nodes.keys().copied().collect::<Vec<_>>() {
+        if pid == iso1 || pid == iso2 {
+            continue; // still isolated — can't reach Accept
+        }
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((ldr, true)) if ldr == l2)
+            })
+        });
+    }
+
+    // Reconnect the minority and wait for them to finish Phase 1 recovery
+    // (AcceptSync from l2) before submitting E3.  Without this wait, iso1/iso2
+    // may still have accepted_idx=0 when E3 arrives, trigger the stale-log
+    // guard, and initiate another Phase 1, delaying E3's decision and risking
+    // the timeout when the full test suite runs back-to-back.
+    sys.set_node_connections(iso1, true);
+    sys.set_node_connections(iso2, true);
+    for pid in [iso1, iso2] {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((ldr, true)) if ldr == l2)
+            })
+        });
+    }
+
+    // Submit a fresh entry E3 via a surviving coordinator.  All 6 nodes are
+    // now in Phase::Accept under l2, so they all participate in the fast path.
+    let c3 = sys
+        .nodes
+        .keys()
+        .copied()
+        .find(|&p| p != l2 && p != iso1 && p != iso2)
+        .expect("c3");
+    let e3 = Value::with_id(4402);
+    let (kp3, kf3) = promise::<()>();
+    sys.nodes.get(&c3).unwrap().on_definition(|x| {
+        x.insert_decided_future(Ask::new(kp3, e3.clone()));
+        x.paxos.append(e3.clone()).expect("append e3");
+    });
+    kf3.wait_timeout(cfg.wait_timeout).expect("e3 not decided");
+
+    // All 6 surviving nodes must decide all 3 entries.
+    // E1 and E2 were decided in the majority before E3 was submitted, so
+    // their relative order is already fixed and consistent across the cluster.
+    // E3 is always last.
+    for pid in sys.nodes.keys().copied().collect::<Vec<_>>() {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                x.paxos.get_decided_idx() >= 3
+            })
+        });
+        let decided = read_decided_values(&sys, pid);
+        assert_eq!(decided.len(), 3, "node {pid} should have exactly 3 decided entries");
+        assert!(decided.contains(&e1), "node {pid} missing E1");
+        assert!(decided.contains(&e2), "node {pid} missing E2");
+        assert_eq!(decided[2], e3, "node {pid}: E3 must be the last decided entry");
+    }
+
+    test_end("partition_then_leader_crash_minority_rejoins");
+}
+
 /// Stress test — 15 entries from 5 concurrent coordinators.
 ///
 /// N=7, fast_quorum=6.  Five non-leader nodes each append 3 entries, with

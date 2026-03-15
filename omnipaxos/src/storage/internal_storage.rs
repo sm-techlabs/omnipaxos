@@ -490,6 +490,16 @@ where
         self.storage.get_suffix(from)
     }
 
+    /// Discard all accepted-but-not-yet-decided entries by truncating the log
+    /// to `idx`.  Used when DOM hash-mismatch recovery discovers that entries
+    /// above the committed decided_idx are incorrect.
+    pub(crate) fn truncate_to(&mut self, idx: usize) -> StorageResult<()> {
+        self.storage
+            .write_atomically(vec![StorageOp::AppendOnPrefix(idx, vec![])])?;
+        self.state_cache.accepted_idx = idx;
+        Ok(())
+    }
+
     pub(crate) fn get_promise(&self) -> Ballot {
         self.state_cache.promise
     }

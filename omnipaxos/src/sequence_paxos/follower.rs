@@ -210,22 +210,22 @@ where
                 new_accepted_idx = flushed_after_decide;
             }
             if let Some(idx) = new_accepted_idx {
-                #[cfg(feature = "logging")]
-                info!(
-                    self.logger,
-                    "[RECV][ACCEPT_DECIDE] coordinator={} request={} accepted_idx={} \
-                     decided_idx={} fast_path={}",
-                    id.0,
-                    id.1,
-                    idx,
-                    decided_idx,
-                    is_from_early_buffer,
-                );
                 if is_from_early_buffer {
                     self.reply_fast_accepted(idx, deadline, id);
                 } else {
                     // Slow-path: adopt the leader's DOM hash so our hash stays
                     // consistent with nodes that accepted the same entries via fast path.
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "[RECV][ACCEPT_DECIDE] coordinator={} request={} accepted_idx={} \
+                        decided_idx={} fast_path={}",
+                        id.0,
+                        id.1,
+                        idx,
+                        decided_idx,
+                        is_from_early_buffer,
+                    );
                     self.dom.last_log_hash = dom_hash;
                     self.reply_accepted(n, idx);
                 }
@@ -286,14 +286,26 @@ where
                     .get_hash_at(dec.decided_idx)
                     .unwrap_or(self.dom.last_log_hash);
                 if dec.hash != our_hash_at_decided {
+                    // Truncate log back to our last committed decided_idx so
+                    // that the Promise we send during recovery reports the
+                    // correct accepted_idx.  Without this the leader treats
+                    // the wrong fast-path entries as valid and only sends the
+                    // tail, leaving the diverged entries in place.
+                    let safe_idx = self.internal_storage.get_decided_idx();
+                    self.internal_storage
+                        .truncate_to(safe_idx)
+                        .expect(WRITE_ERROR_MSG);
+                    let safe_hash = self.dom.get_hash_at(safe_idx).unwrap_or(0);
+                    self.dom.sync_to_log_position(safe_hash, safe_idx);
                     #[cfg(feature = "logging")]
                     warn!(
                         self.logger,
                         "[DECIDE][DOM_HASH] hash mismatch at decided_idx={}: \
-                         ours={} leader={} → triggering Phase 1 recovery",
+                         ours={} leader={} → truncated log to decided_idx={}, triggering Phase 1 recovery",
                         dec.decided_idx,
                         our_hash_at_decided,
                         dec.hash,
+                        safe_idx,
                     );
                     self.reconnected(dec.n.pid);
                     return;
