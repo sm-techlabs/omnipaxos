@@ -25,11 +25,11 @@ for ((i = 1; i <= N; i++)); do
     echo "  Run $i / $N"
     echo "========================================"
 
-    tmpfile=$(mktemp /tmp/dom_run_XXXXXX.log)
+    tmpfile=$(mktemp /tmp/dom_run_XXXXXX)
 
     # Stream output to terminal; also save to tmpfile for later parsing.
     # '|| true' prevents a non-zero cargo-test exit from aborting the loop.
-    cargo test --test dom_integration -- --nocapture 2>&1 | tee "$tmpfile" || true
+    cargo test --features "logging, toml_config" --test dom_integration -- --nocapture 2>&1 | tee "$tmpfile" || true
     # PIPESTATUS[0] is valid here because the pipeline ran in the current shell.
     cargo_exit=${PIPESTATUS[0]}
 

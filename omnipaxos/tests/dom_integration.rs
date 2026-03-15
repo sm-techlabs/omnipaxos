@@ -1407,6 +1407,20 @@ fn many_entries_multiple_coordinators() {
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
 
+    // Wait for every node to reach Phase::Accept before proposing.
+    // get_current_leader() returns Some((pid, is_accepted=true)) once the node
+    // has received AcceptSync and transitioned out of Prepare.  Without this
+    // wait, proposals submitted while nodes are still in Prepare phase fall
+    // back to the slow path (ProposalForward → AcceptDecide), bypassing the
+    // fast path entirely and leaving dom_hash=0 everywhere.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((_, true)))
+            })
+        });
+    }
+
     // Pick 5 distinct non-leader coordinators.
     let coordinators: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
         .filter(|&pid| pid != leader)

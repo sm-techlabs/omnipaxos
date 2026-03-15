@@ -270,11 +270,16 @@ where
                 return;
             }
 
-            // Fast-path DOM hash correction: compare the leader's hash for
-            // decided_idx against the follower's hash *at that same position*,
-            // not against last_log_hash.  The follower may have fast-accepted
-            // entries beyond decided_idx whose hashes are still valid; blindly
-            // overwriting last_log_hash would corrupt them.
+            // DOM hash check: if the leader's hash for decided_idx differs from
+            // ours, our log diverged from the leader's.  This can happen either
+            // because the leader rewrote a deadline (different metadata, same
+            // entry) OR because we accepted a different entry at that position
+            // (e.g. we released entry A first while the leader ordered entry B
+            // first because B arrived late at us and was dropped by the
+            // late-entry guard in handle_fast_propose).  We cannot distinguish
+            // these cases from the Decide message alone, so we always trigger
+            // Phase 1 recovery.  AcceptSync will deliver the correct entries and
+            // reset the hash chain via sync_to_log_position.
             if dec.hash != 0 {
                 let our_hash_at_decided = self
                     .dom
@@ -282,15 +287,16 @@ where
                     .unwrap_or(self.dom.last_log_hash);
                 if dec.hash != our_hash_at_decided {
                     #[cfg(feature = "logging")]
-                    info!(
+                    warn!(
                         self.logger,
-                        "[DECIDE][DOM_HASH] patching hash chain at decided_idx={}: \
-                         {} → {} (deadline reorder correction)",
+                        "[DECIDE][DOM_HASH] hash mismatch at decided_idx={}: \
+                         ours={} leader={} → triggering Phase 1 recovery",
                         dec.decided_idx,
                         our_hash_at_decided,
                         dec.hash,
                     );
-                    self.dom.patch_hash_at(dec.decided_idx, dec.hash);
+                    self.reconnected(dec.n.pid);
+                    return;
                 }
             }
 
