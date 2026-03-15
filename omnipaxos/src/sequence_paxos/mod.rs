@@ -438,7 +438,7 @@ where
                         {
                             warn!(
                                 self.logger,
-                                "[DOM][FAST_PROPOSE_LEADER] client_id={} request_id={} deadline_rewrite={} -> {}",
+                                "[DOM][FAST_PROPOSE_LEADER] client_id={} request={} deadline_rewrite={} -> {}",
                                 client_id,
                                 request_id,
                                 original_deadline,
