@@ -400,10 +400,10 @@ where
                 PaxosMsg::Sync(_) => "FastSync",
                 _ => "other",
             };
-                info!(
-                    self.logger,
-                    "[RECV] {} from={}", msg_type, m.from
-                );
+                // info!(
+                //     self.logger,
+                //     "[RECV] {} from={}", msg_type, m.from
+                // );
             }
         match m.msg {
             PaxosMsg::PrepareReq(prepreq) => self.handle_preparereq(prepreq, m.from),

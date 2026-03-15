@@ -1379,3 +1379,99 @@ fn hash_mismatch_on_fast_accepted_triggers_recovery() {
 
     test_end("hash_mismatch_on_fast_accepted_triggers_recovery");
 }
+
+/// Stress test — 15 entries from 5 concurrent coordinators.
+///
+/// N=7, fast_quorum=6.  Five non-leader nodes each append 3 entries, with
+/// proposals interleaved across coordinators in each round so that deadlines
+/// collide and the leader is likely to rewrite some of them.  This exercises:
+///
+///   - Multiple concurrent DOM buffer entries competing for log slots
+///   - Deadline rewrite path on the leader (late entries bumped forward)
+///   - Hash-mismatch recovery when a follower accepted a pre-rewrite deadline
+///   - Slow-path fallback (resend timer) for any entries that stall
+///   - All DOM hashes converging to the same value on all 7 nodes
+///
+/// Because DOM deadline ordering is non-deterministic the test compares the
+/// *set* of decided values rather than their exact sequence.
+#[test]
+#[serial]
+fn many_entries_multiple_coordinators() {
+    test_begin("many_entries_multiple_coordinators");
+    let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
+    let sys = TestGuard::new(
+        TestSystem::with(cfg),
+        "many_entries_multiple_coordinators",
+    );
+    sys.start_all_nodes();
+
+    let leader = sys.get_elected_leader(1, cfg.wait_timeout);
+
+    // Pick 5 distinct non-leader coordinators.
+    let coordinators: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&pid| pid != leader)
+        .take(5)
+        .collect();
+    assert_eq!(coordinators.len(), 5, "need at least 5 non-leader nodes (N=7 guarantees this)");
+
+    // 5 coordinators × 3 rounds = 15 entries.
+    // Interleave by coordinator within each round so proposals from different
+    // nodes are submitted back-to-back, maximising deadline collisions.
+    const ROUNDS: u64 = 3;
+    const COORDS: u64 = 5;
+    let mut all_values: Vec<Value> = Vec::new();
+    for round in 0..ROUNDS {
+        for (i, &coord) in coordinators.iter().enumerate() {
+            let id = round * COORDS + i as u64 + 1; // 1..=15, all unique
+            let val = Value::with_id(id);
+            all_values.push(val.clone());
+            sys.nodes.get(&coord).unwrap().on_definition(|x| {
+                x.paxos.append(val).expect("append should succeed");
+            });
+        }
+    }
+    assert_eq!(all_values.len(), 15);
+
+    // All 7 nodes must decide all 15 entries.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(cfg.wait_timeout, || {
+            sys.nodes
+                .get(&pid)
+                .unwrap()
+                .on_definition(|x| x.paxos.get_decided_idx() >= 15)
+        });
+    }
+
+    // Every node must decide the same *set* of values.
+    // The decided order is deadline-determined (non-deterministic across runs)
+    // so we check membership rather than exact sequence.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        let decided = read_decided_values(&sys, pid);
+        assert_eq!(
+            decided.len(),
+            15,
+            "node {pid} decided {} entries, expected 15",
+            decided.len()
+        );
+        for v in &all_values {
+            assert!(
+                decided.contains(v),
+                "node {pid} is missing value {v:?} from its decided log"
+            );
+        }
+    }
+
+    // All 7 nodes must agree on the final DOM hash.
+    // A diverged hash means at least one node applied different fast-path
+    // metadata to its chain — a correctness bug.
+    let leader_hash = get_dom_hash(&sys, leader);
+    for pid in 1..=cfg.num_nodes as NodeId {
+        let h = get_dom_hash(&sys, pid);
+        assert_eq!(
+            h, leader_hash,
+            "node {pid} dom_hash={h:#018x} != leader dom_hash={leader_hash:#018x}"
+        );
+    }
+
+    test_end("many_entries_multiple_coordinators");
+}
