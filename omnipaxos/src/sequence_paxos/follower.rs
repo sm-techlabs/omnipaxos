@@ -89,7 +89,10 @@ where
                 accsync.seq_num,
             );
             self.current_seq_num = accsync.seq_num;
-            self.dom.last_log_hash = accsync.dom_hash;
+            // Re-anchor the DOM hash chain to the leader's state and fill
+            // log_hashes to new_accepted_idx so that get_hash_at(pos) is
+            // correct for all subsequent fast-path entries.
+            self.dom.sync_to_log_position(accsync.dom_hash, new_accepted_idx);
             let cached_idx = self.outgoing.len();
             self.latest_accepted_meta = Some((accsync.n, cached_idx));
             self.outgoing.push(Message::SequencePaxos(PaxosMessage {

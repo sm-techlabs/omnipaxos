@@ -342,6 +342,12 @@ where
                 new_accepted_idx = self.internal_storage.get_accepted_idx();
             }
         }
+        // Slow-path entries (from sync_log and buffered_proposals) occupy log
+        // positions 1..=new_accepted_idx without going through the DOM hash
+        // chain.  Fill log_hashes with placeholders so that get_hash_at(pos)
+        // returns the correct hash for subsequent fast-path entries at
+        // positions > new_accepted_idx.
+        self.dom.fill_to_log_position(new_accepted_idx);
         self.state = (Role::Leader, Phase::Accept);
         #[cfg(feature = "logging")]
         self.update_state_label();

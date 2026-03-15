@@ -16,12 +16,46 @@ use omnipaxos::{
 use serial_test::serial;
 use utils::{TestConfig, TestSystem, Value};
 
-fn shutdown(mut sys: TestSystem) {
-    let kompact_system =
-        std::mem::take(&mut sys.kompact_system).expect("No KompactSystem in memory");
-    match kompact_system.shutdown() {
-        Ok(_) => {}
-        Err(e) => panic!("Error on kompact shutdown: {}", e),
+/// RAII guard that prints the final log dump and shuts down the Kompact system
+/// when dropped — including on panic.  This ensures the log is always visible
+/// even when a test assertion fires mid-test.
+struct TestGuard {
+    sys: Option<TestSystem>,
+    name: &'static str,
+}
+
+impl TestGuard {
+    fn new(sys: TestSystem, name: &'static str) -> Self {
+        Self { sys: Some(sys), name }
+    }
+}
+
+impl std::ops::Deref for TestGuard {
+    type Target = TestSystem;
+    fn deref(&self) -> &TestSystem {
+        self.sys.as_ref().unwrap()
+    }
+}
+
+impl std::ops::DerefMut for TestGuard {
+    fn deref_mut(&mut self) -> &mut TestSystem {
+        self.sys.as_mut().unwrap()
+    }
+}
+
+impl Drop for TestGuard {
+    fn drop(&mut self) {
+        if let Some(sys) = &self.sys {
+            print_final_logs(sys, self.name);
+        }
+        if let Some(mut sys) = self.sys.take() {
+            if let Some(ks) = std::mem::take(&mut sys.kompact_system) {
+                // Don't panic in Drop — a double-panic causes an abort.
+                if let Err(e) = ks.shutdown() {
+                    eprintln!("Error on kompact shutdown: {e}");
+                }
+            }
+        }
     }
 }
 
@@ -209,7 +243,7 @@ fn dom_default_testcfg(num_nodes: Option<usize>) -> TestConfig {
 fn fast_path_coordinator_decides_before_cluster_wide_decide() {
     test_begin("fast_path_coordinator_decides_before_cluster_wide_decide");
     let cfg = dom_default_testcfg(None);
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "fast_path_coordinator_decides_before_cluster_wide_decide");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -276,9 +310,7 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "fast_path_coordinator_decides_before_cluster_wide_decide");
     test_end("fast_path_coordinator_decides_before_cluster_wide_decide");
-    shutdown(sys);
 }
 
 /// Edge case: fast quorum not reached, system must fall back to the slow path.
@@ -301,7 +333,7 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
 fn partial_fast_quorum_falls_back_to_slow_path() {
     test_begin("partial_fast_quorum_falls_back_to_slow_path");
     let cfg = dom_default_testcfg(Some(3)); // N=3 so fast_quorum=3; blocking one follower drops below quorum
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "partial_fast_quorum_falls_back_to_slow_path");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -356,9 +388,7 @@ fn partial_fast_quorum_falls_back_to_slow_path() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "partial_fast_quorum_falls_back_to_slow_path");
     test_end("partial_fast_quorum_falls_back_to_slow_path");
-    shutdown(sys);
 }
 
 /// Edge case: coordinator crashes after broadcasting FastPropose but before the
@@ -382,7 +412,7 @@ fn partial_fast_quorum_falls_back_to_slow_path() {
 fn coordinator_crash_still_decides() {
     test_begin("coordinator_crash_still_decides");
     let cfg = dom_default_testcfg(Some(3));
-    let mut sys = TestSystem::with(cfg);
+    let mut sys = TestGuard::new(TestSystem::with(cfg), "coordinator_crash_still_decides");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -410,9 +440,7 @@ fn coordinator_crash_still_decides() {
         wait_for_decided_values(&sys, pid, &[first_value.clone()], cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "coordinator_crash_still_decides");
     test_end("coordinator_crash_still_decides");
-    shutdown(sys);
 }
 
 /// Edge case: a fully partitioned follower's log diverges from the cluster;
@@ -437,7 +465,7 @@ fn coordinator_crash_still_decides() {
 fn divergent_logs_reconcile_via_slow_path() {
     test_begin("divergent_logs_reconcile_via_slow_path");
     let cfg = dom_default_testcfg(None);
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "divergent_logs_reconcile_via_slow_path");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -506,9 +534,7 @@ fn divergent_logs_reconcile_via_slow_path() {
         wait_for_decided_values(&sys, pid, &reference, cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "divergent_logs_reconcile_via_slow_path");
     test_end("divergent_logs_reconcile_via_slow_path");
-    shutdown(sys);
 }
 
 /// Edge case: two concurrent fast-path proposals carry an identical deadline;
@@ -535,7 +561,7 @@ fn divergent_logs_reconcile_via_slow_path() {
 fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
     test_begin("fast_path_same_deadline_tiebreaks_by_coordinator_pid");
     let cfg = dom_default_testcfg(None);
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "fast_path_same_deadline_tiebreaks_by_coordinator_pid");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -576,9 +602,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "fast_path_same_deadline_tiebreaks_by_coordinator_pid");
     test_end("fast_path_same_deadline_tiebreaks_by_coordinator_pid");
-    shutdown(sys);
 }
 
 /// Test — Seven nodes, three coordinators with distinct deadlines.
@@ -595,7 +619,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
 fn seven_nodes_three_coordinators_deadline_ordering() {
     test_begin("seven_nodes_three_coordinators_deadline_ordering");
     let cfg = dom_default_testcfg(None);
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "seven_nodes_three_coordinators_deadline_ordering");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -651,9 +675,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "seven_nodes_three_coordinators_deadline_ordering");
     test_end("seven_nodes_three_coordinators_deadline_ordering");
-    shutdown(sys);
 }
 
 /// Test — Seven nodes, three concurrent coordinators, one node fully partitioned.
@@ -676,7 +698,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
 fn seven_nodes_multiple_coordinators_straggler_recovers() {
     test_begin("seven_nodes_multiple_coordinators_straggler_recovers");
     let cfg = dom_default_testcfg(None);
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "seven_nodes_multiple_coordinators_straggler_recovers");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -759,9 +781,7 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
         assert!(decided.contains(&v4), "node {pid} missing v4");
     }
 
-    print_final_logs(&sys, "seven_nodes_multiple_coordinators_straggler_recovers");
     test_end("seven_nodes_multiple_coordinators_straggler_recovers");
-    shutdown(sys);
 }
 
 /// Happy path — Fast Path end-to-end
@@ -784,7 +804,7 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
 fn happy_path_fast_path() {
     test_begin("happy_path_fast_path");
     let cfg = dom_default_testcfg(Some(3)); // 3 nodes, all connected
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "happy_path_fast_path");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -814,9 +834,7 @@ fn happy_path_fast_path() {
         wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "happy_path_fast_path");
     test_end("happy_path_fast_path");
-    shutdown(sys);
 }
 
 /// Happy path — Slow Path end-to-end
@@ -845,7 +863,7 @@ fn happy_path_fast_path() {
 fn happy_path_slow_path() {
     test_begin("happy_path_slow_path");
     let cfg = dom_default_testcfg(Some(3)); // 3 nodes
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "happy_path_slow_path");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -874,9 +892,7 @@ fn happy_path_slow_path() {
         wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "happy_path_slow_path");
     test_end("happy_path_slow_path");
-    shutdown(sys);
 }
 
 /// Test — N=7, 3 coordinators, one follower misses one coordinator's FastPropose.
@@ -900,7 +916,7 @@ fn happy_path_slow_path() {
 fn seven_nodes_isolated_from_one_coordinator_converges() {
     test_begin("seven_nodes_isolated_from_one_coordinator_converges");
     let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "seven_nodes_isolated_from_one_coordinator_converges");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -985,9 +1001,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
         wait_for_decided_values(&sys, pid, &expected, cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "seven_nodes_isolated_from_one_coordinator_converges");
     test_end("seven_nodes_isolated_from_one_coordinator_converges");
-    shutdown(sys);
 }
 
 /// Test — Termination when the leader receives fewer FastAccepted than the super quorum.
@@ -1008,7 +1022,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
 fn termination_when_below_fast_quorum() {
     test_begin("termination_when_below_fast_quorum");
     let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "termination_when_below_fast_quorum");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -1041,9 +1055,7 @@ fn termination_when_below_fast_quorum() {
         wait_for_decided_values(&sys, pid, &[value.clone()], cfg.wait_timeout);
     }
 
-    print_final_logs(&sys, "termination_when_below_fast_quorum");
     test_end("termination_when_below_fast_quorum");
-    shutdown(sys);
 }
 
 /// Test — DOM hash diverges after a slow-path decision when one node missed
@@ -1071,7 +1083,7 @@ fn termination_when_below_fast_quorum() {
 fn dom_hash_diverges_after_slow_path_decision() {
     test_begin("dom_hash_diverges_after_slow_path_decision");
     let cfg = dom_default_testcfg(Some(3)); // N=3, fast_quorum=3 (ALL nodes)
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "dom_hash_diverges_after_slow_path_decision");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -1124,9 +1136,7 @@ fn dom_hash_diverges_after_slow_path_decision() {
          AcceptDecide it must match the leader's hash"
     );
 
-    print_final_logs(&sys, "dom_hash_diverges_after_slow_path_decision");
     test_end("dom_hash_diverges_after_slow_path_decision");
-    shutdown(sys);
 }
 
 /// Edge case: the leader receives a FastPropose whose deadline has already
@@ -1159,7 +1169,7 @@ fn dom_hash_diverges_after_slow_path_decision() {
 fn leader_reorders_stale_deadline_decides_via_slow_path() {
     test_begin("leader_reorders_stale_deadline_decides_via_slow_path");
     let cfg = dom_default_testcfg(Some(3));
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "leader_reorders_stale_deadline_decides_via_slow_path");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -1237,9 +1247,7 @@ fn leader_reorders_stale_deadline_decides_via_slow_path() {
         hashes,
     );
 
-    print_final_logs(&sys, "leader_reorders_stale_deadline_decides_via_slow_path");
     test_end("leader_reorders_stale_deadline_decides_via_slow_path");
-    shutdown(sys);
 }
 
 /// Edge case: a FastPropose arrives at the leader with a different deadline
@@ -1276,7 +1284,7 @@ fn leader_reorders_stale_deadline_decides_via_slow_path() {
 fn hash_mismatch_on_fast_accepted_triggers_recovery() {
     test_begin("hash_mismatch_on_fast_accepted_triggers_recovery");
     let cfg = dom_default_testcfg(Some(3));
-    let sys = TestSystem::with(cfg);
+    let sys = TestGuard::new(TestSystem::with(cfg), "hash_mismatch_on_fast_accepted_triggers_recovery");
     sys.start_all_nodes();
 
     let leader = sys.get_elected_leader(1, cfg.wait_timeout);
@@ -1357,7 +1365,5 @@ fn hash_mismatch_on_fast_accepted_triggers_recovery() {
         );
     }
 
-    print_final_logs(&sys, "hash_mismatch_on_fast_accepted_triggers_recovery");
     test_end("hash_mismatch_on_fast_accepted_triggers_recovery");
-    shutdown(sys);
 }

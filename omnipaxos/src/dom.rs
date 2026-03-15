@@ -392,6 +392,32 @@ where
         1 + ((3 * non_leader_nodes + 3) / 4)
     }
 
+    /// Fill `log_hashes` and `metadata_log` with placeholder slow-path entries
+    /// up to `accepted_idx` positions, using the current `last_log_hash` as
+    /// the fill value.  Must be called after slow-path (non-DOM) entries are
+    /// committed to storage so that `get_hash_at(pos)` returns the correct
+    /// hash for all subsequent fast-path entries.
+    pub fn fill_to_log_position(&mut self, accepted_idx: usize) {
+        while self.log_hashes.len() < accepted_idx {
+            self.log_hashes.push(self.last_log_hash);
+            self.metadata_log.push(DomMetadata { id: (0, 0), deadline: 0 });
+        }
+    }
+
+    /// Reset and re-anchor the DOM hash state to `base_hash`, then fill
+    /// `log_hashes` and `metadata_log` to `accepted_idx` placeholder entries.
+    /// Called on the follower when an `AcceptSync` is received so that the
+    /// hash chain is aligned with the new leader's state before any new
+    /// fast-path entries are processed.
+    pub fn sync_to_log_position(&mut self, base_hash: u64, accepted_idx: usize) {
+        self.last_log_hash = base_hash;
+        self.log_hashes.clear();
+        self.metadata_log.clear();
+        self.log_hashes.resize(accepted_idx, base_hash);
+        self.metadata_log
+            .resize(accepted_idx, DomMetadata { id: (0, 0), deadline: 0 });
+    }
+
     fn append_metadata(&mut self, meta: DomMetadata) {
         self.generate_log_hash(&meta);
         self.metadata_log.push(meta);
