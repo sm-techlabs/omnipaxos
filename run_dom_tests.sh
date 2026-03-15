@@ -35,7 +35,7 @@ for ((i = 1; i <= N; i++)); do
 
     # Extract the canonical "test result: …" line (last occurrence wins in
     # case cargo prints multiple test-suite blocks).
-    summary_line=$(grep -oP 'test result:.*' "$tmpfile" | tail -1)
+    summary_line=$(grep -o 'test result:.*' "$tmpfile" | tail -1)
 
     if [[ -z "$summary_line" ]]; then
         summary_line="(no 'test result:' line found — cargo exit code $cargo_exit)"
