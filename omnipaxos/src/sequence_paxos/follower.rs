@@ -114,7 +114,7 @@ where
 
     pub(crate) fn handle_acceptdecide(
         &mut self,
-        acc_dec: AcceptDecide<T>,
+        mut acc_dec: AcceptDecide<T>,
         is_from_early_buffer: bool,
     ) {
         let expected_sequence = if is_from_early_buffer {
@@ -151,6 +151,41 @@ where
                 self.reconnected(n.pid);
                 return;
             }
+            // Idempotency guard for slow-path (AcceptDecide) messages.
+            // If this follower has already appended some or all of the entries in this
+            // message (e.g., via DOM early_buffer release followed by a fallback
+            // AcceptDecide), skip or trim the prefix we already have.
+            if !is_from_early_buffer {
+                let my_idx = self.internal_storage.get_accepted_idx();
+                let entries_end = acc_dec.prev_idx + acc_dec.entries.len();
+                if my_idx >= entries_end {
+                    // All entries already in the log — just advance decided_idx.
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "[ACCEPT_DECIDE][IDEMPOTENT] skipping duplicate: my_idx={} entries=[{}..{}]",
+                        my_idx,
+                        acc_dec.prev_idx,
+                        entries_end,
+                    );
+                    self.update_decided_idx_and_get_accepted_idx(acc_dec.decided_idx);
+                    return;
+                }
+                if my_idx > acc_dec.prev_idx {
+                    // Trim the already-appended prefix.
+                    let skip = my_idx - acc_dec.prev_idx;
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "[ACCEPT_DECIDE][IDEMPOTENT] trimming {} already-appended entries: my_idx={} prev_idx={}",
+                        skip,
+                        my_idx,
+                        acc_dec.prev_idx,
+                    );
+                    acc_dec.entries.drain(..skip);
+                }
+            }
+
             let deadline = acc_dec.deadline;
             let id = acc_dec.id;
             let dom_hash = acc_dec.dom_hash;

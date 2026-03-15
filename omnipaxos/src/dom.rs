@@ -420,6 +420,11 @@ where
         self.log_hashes.resize(accepted_idx, base_hash);
         self.metadata_log
             .resize(accepted_idx, DomMetadata { id: (0, 0), deadline: 0 });
+        // Clear the early_buffer: any entries buffered before this AcceptSync are
+        // now either in the synced log (delivered by AcceptSync) or stale.  They
+        // must not be replayed after the sync because that would cause duplicate
+        // appends at positions already covered by the new leader's log.
+        self.early_buffer.clear();
     }
 
     fn append_metadata(&mut self, meta: DomMetadata) {

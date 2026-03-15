@@ -565,6 +565,7 @@ where
             id: request_key,
             deadline: self.dom.get_deadline(),
             dom_hash: 0, // fast-path: receivers compute the hash themselves via reply_fast_accepted
+            prev_idx: 0, // not used for fast-path entries
         };
         #[cfg(feature = "logging")]
         info!(

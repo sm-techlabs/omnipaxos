@@ -583,6 +583,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
         deadline: shared_deadline,
         id: (2, 200),
         dom_hash: 0,
+        prev_idx: 0,
     };
     let second = AcceptDecide {
         n: ballot,
@@ -592,6 +593,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
         deadline: shared_deadline,
         id: (3, 300),
         dom_hash: 0,
+        prev_idx: 0,
     };
 
     inject_fast_propose(&sys, 2, first);
@@ -643,6 +645,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         deadline: now + 50_000,
         id: (2, 1000),
         dom_hash: 0,
+        prev_idx: 0,
     };
     let proposal_b = AcceptDecide {
         n: ballot,
@@ -652,6 +655,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         deadline: now + 100_000,
         id: (3, 2000),
         dom_hash: 0,
+        prev_idx: 0,
     };
     let proposal_c = AcceptDecide {
         n: ballot,
@@ -661,6 +665,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
         deadline: now + 150_000,
         id: (4, 3000),
         dom_hash: 0,
+        prev_idx: 0,
     };
 
     // Broadcast all three proposals to every node simultaneously.
@@ -948,6 +953,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
         deadline: now + 50_000,
         id: (c1 as u64, 3100),
         dom_hash: 0,
+        prev_idx: 0,
     };
     // 6 out of 7 nodes receive c1's FastPropose → fast quorum (6) met.
     inject_fast_propose_except(&sys, c1, p_c1, isolated);
@@ -978,6 +984,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
         deadline: now2 + 50_000,
         id: (c2 as u64, 3101),
         dom_hash: 0,
+        prev_idx: 0,
     };
     let p_c3 = AcceptDecide {
         n: ballot,
@@ -987,6 +994,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
         deadline: now2 + 100_000,
         id: (c3 as u64, 3102),
         dom_hash: 0,
+        prev_idx: 0,
     };
     inject_fast_propose(&sys, c2, p_c2);
     inject_fast_propose(&sys, c3, p_c3);
@@ -1202,6 +1210,7 @@ fn leader_reorders_stale_deadline_decides_via_slow_path() {
         deadline: d_warmup,
         id: (coordinator as u64, 5000),
         dom_hash: 0,
+        prev_idx: 0,
     };
     inject_fast_propose(&sys, coordinator, warmup_proposal);
     for pid in 1..=cfg.num_nodes as NodeId {
@@ -1223,6 +1232,7 @@ fn leader_reorders_stale_deadline_decides_via_slow_path() {
         deadline: stale_deadline,
         id: (coordinator as u64, 5001),
         dom_hash: 0,
+        prev_idx: 0,
     };
     inject_fast_propose(&sys, coordinator, late_proposal);
 
@@ -1320,6 +1330,7 @@ fn hash_mismatch_on_fast_accepted_triggers_recovery() {
         deadline: d1,
         id: entry_id,
         dom_hash: 0,
+        prev_idx: 0,
     };
     let proposal_leader = AcceptDecide {
         n: ballot,
@@ -1329,6 +1340,7 @@ fn hash_mismatch_on_fast_accepted_triggers_recovery() {
         deadline: d2,
         id: entry_id,
         dom_hash: 0,
+        prev_idx: 0,
     };
 
     // Broadcast D1 to every node except the leader.
