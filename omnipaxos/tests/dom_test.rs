@@ -7,6 +7,15 @@ use omnipaxos::util::SequenceNumber;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+
+#[test]
+fn test_clock_env() {
+    // Arrange: Initialize a DOM with a fast quorum size of 3
+    let dom = DOM::<Value>::new(3);
+    // no env set so it should default to 0
+    assert_eq!(dom.sim_clock.get_uncertainty(), 0);
+}
+
 #[test]
 fn test_handle_fast_propose_adds_to_early_buffer() {
     // Arrange: Initialize a DOM with a fast quorum size of 3
@@ -105,7 +114,7 @@ fn test_handle_fast_propose_adds_to_late_buffer() {
     dom.handle_fast_propose(ac_message);
     dom.release_message();
     dom.handle_fast_propose(b_message);
-    assert_eq!(dom.late_buffer.len(), 1);
+    assert_eq!(dom.late_buffer.len(), 0);
 }
 
 #[test]

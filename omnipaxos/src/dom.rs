@@ -77,7 +77,8 @@ where
     early_buffer: BinaryHeap<AcceptDecide<T>>,
     /// late buffer
     pub late_buffer: HashMap<(u64, u64), AcceptDecide<T>>,
-    sim_clock: ClockState,
+    /// sim clock
+    pub sim_clock: ClockState,
     last_released_timestamp: i64,
     /// hash value
     pub last_log_hash: u64,
