@@ -97,7 +97,7 @@ where
         return DOM {
             early_buffer: BinaryHeap::new(),
             late_buffer: HashMap::new(),
-            sim_clock: ClockState::new(0, 100, 100, 10),
+            sim_clock: ClockState::new_from_env(),
             last_released_timestamp: 0,
             last_log_hash: 0,
             log_hashes: Vec::new(),
