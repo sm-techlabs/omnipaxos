@@ -77,7 +77,8 @@ where
     early_buffer: BinaryHeap<AcceptDecide<T>>,
     /// late buffer
     pub late_buffer: HashMap<(u64, u64), AcceptDecide<T>>,
-    sim_clock: ClockState,
+    /// sim clock
+    pub sim_clock: ClockState,
     last_released_timestamp: i64,
     /// hash value
     pub last_log_hash: u64,
@@ -97,7 +98,7 @@ where
         return DOM {
             early_buffer: BinaryHeap::new(),
             late_buffer: HashMap::new(),
-            sim_clock: ClockState::new(0, 100, 100, 10),
+            sim_clock: ClockState::new_from_env(),
             last_released_timestamp: 0,
             last_log_hash: 0,
             log_hashes: Vec::new(),

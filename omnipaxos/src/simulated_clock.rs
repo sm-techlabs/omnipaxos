@@ -1,6 +1,7 @@
 //! Simulated clock implementation with drift, uncertainty, and offset modeling.
 use rand::Rng;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::env;
 /// Internal state of a simulated clock used to model uncertainty, drift,
 /// frequency skew, and base offset.
 ///
@@ -28,6 +29,21 @@ impl ClockState {
     /// - `frequency`: Frequency used to compute drift modulation.
     /// - `base_offset`: Constant offset applied to all timestamps.
     pub fn new(uncertainty: i64, drift_rate: i64, frequency: i64, base_offset: i64) -> Self {
+        Self {
+            uncertainty,
+            drift_rate,
+            frequency,
+            base_offset,
+        }
+    }
+
+    /// Creates a Sim Clock from env variables
+    pub fn new_from_env() -> Self {
+        let default_val: i64 = 0;
+        let uncertainty = env::var("CLOCK_UNCERTAINTY").ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(default_val);
+        let drift_rate = env::var("CLOCK_DRIFT").ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(default_val);
+        let frequency = env::var("CLOCK_SYNC_FREQUENCY").ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(default_val);
+        let base_offset = env::var("CLOCK_OFFSET").ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(default_val);
         Self {
             uncertainty,
             drift_rate,
