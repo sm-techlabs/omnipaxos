@@ -112,6 +112,10 @@ pub mod sequence_paxos {
         /// stays consistent with nodes that applied the same entries via the fast path.
         /// Set to 0 for FastPropose messages (fast-path followers compute the hash themselves).
         pub dom_hash: u64,
+        /// The Paxos log position immediately before the first entry in `entries`.
+        /// Used by followers to detect and skip duplicate appends (idempotency guard).
+        /// Set to 0 for FastPropose messages (fast-path entries are not de-duplicated).
+        pub prev_idx: usize,
     }
     /// Thanks Gemini
     /// These let us use AcceptDecide with the BinaryHeap

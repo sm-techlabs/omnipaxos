@@ -137,11 +137,15 @@ where
     /// reflects the original deadline.  When those acknowledgements arrive at
     /// the leader it will detect the hash mismatch and trigger recovery on
     /// those followers (see `handle_fast_accepted`).
-    pub fn handle_fast_propose_leader(&mut self, mut ac: AcceptDecide<T>) {
+    pub fn handle_fast_propose_leader(&mut self, mut ac: AcceptDecide<T>) -> Option<i64> {
         if ac.deadline <= self.last_released_timestamp {
             ac.deadline = self.last_released_timestamp + 1;
+            let rewritten_deadline = ac.deadline;
+            self.early_buffer.push(ac);
+            return Some(rewritten_deadline);
         }
         self.early_buffer.push(ac);
+        None
     }
 
     /// Handles a fast path reply
@@ -390,6 +394,50 @@ where
     fn fast_quorum_size(cluster_size: usize) -> usize {
         let non_leader_nodes = cluster_size.saturating_sub(1);
         1 + ((3 * non_leader_nodes + 3) / 4)
+    }
+
+    /// Returns how many replicas have acknowledged slot `accepted_idx` so far.
+    pub fn fast_accepted_count(&self, accepted_idx: usize) -> usize {
+        self.fast_accepted_tracker
+            .get(&accepted_idx)
+            .map(|qd| qd.replicas.len())
+            .unwrap_or(0)
+    }
+
+    /// Returns the fast-quorum threshold for this cluster.
+    pub fn fast_accepted_quorum_size(&self) -> usize {
+        self.fast_quorum_size
+    }
+
+    /// Fill `log_hashes` and `metadata_log` with placeholder slow-path entries
+    /// up to `accepted_idx` positions, using the current `last_log_hash` as
+    /// the fill value.  Must be called after slow-path (non-DOM) entries are
+    /// committed to storage so that `get_hash_at(pos)` returns the correct
+    /// hash for all subsequent fast-path entries.
+    pub fn fill_to_log_position(&mut self, accepted_idx: usize) {
+        while self.log_hashes.len() < accepted_idx {
+            self.log_hashes.push(self.last_log_hash);
+            self.metadata_log.push(DomMetadata { id: (0, 0), deadline: 0 });
+        }
+    }
+
+    /// Reset and re-anchor the DOM hash state to `base_hash`, then fill
+    /// `log_hashes` and `metadata_log` to `accepted_idx` placeholder entries.
+    /// Called on the follower when an `AcceptSync` is received so that the
+    /// hash chain is aligned with the new leader's state before any new
+    /// fast-path entries are processed.
+    pub fn sync_to_log_position(&mut self, base_hash: u64, accepted_idx: usize) {
+        self.last_log_hash = base_hash;
+        self.log_hashes.clear();
+        self.metadata_log.clear();
+        self.log_hashes.resize(accepted_idx, base_hash);
+        self.metadata_log
+            .resize(accepted_idx, DomMetadata { id: (0, 0), deadline: 0 });
+        // Clear the early_buffer: any entries buffered before this AcceptSync are
+        // now either in the synced log (delivered by AcceptSync) or stale.  They
+        // must not be replayed after the sync because that would cause duplicate
+        // appends at positions already covered by the new leader's log.
+        self.early_buffer.clear();
     }
 
     fn append_metadata(&mut self, meta: DomMetadata) {

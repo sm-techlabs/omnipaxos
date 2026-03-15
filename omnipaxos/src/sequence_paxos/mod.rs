@@ -400,11 +400,11 @@ where
                 PaxosMsg::Sync(_) => "FastSync",
                 _ => "other",
             };
-            info!(
-                self.logger,
-                "[RECV] {} from={}", msg_type, m.from
-            );
-        }
+                info!(
+                    self.logger,
+                    "[RECV] {} from={}", msg_type, m.from
+                );
+            }
         match m.msg {
             PaxosMsg::PrepareReq(prepreq) => self.handle_preparereq(prepreq, m.from),
             PaxosMsg::Prepare(prep) => self.handle_prepare(prep, m.from),
@@ -429,7 +429,27 @@ where
             // The leader applies deadline-reordering for late entries; followers do not.
             PaxosMsg::FastPropose(payload) => {
                 if self.state.0 == Role::Leader {
-                    self.dom.handle_fast_propose_leader(payload);
+                    #[cfg(feature = "logging")]
+                    {
+                        let original_deadline = payload.deadline;
+                        let (client_id, request_id) = payload.id;
+                        if let Some(rewritten_deadline) =
+                            self.dom.handle_fast_propose_leader(payload)
+                        {
+                            warn!(
+                                self.logger,
+                                "[DOM][FAST_PROPOSE_LEADER] client_id={} request_id={} deadline_rewrite={} -> {}",
+                                client_id,
+                                request_id,
+                                original_deadline,
+                                rewritten_deadline,
+                            );
+                        }
+                    }
+                    #[cfg(not(feature = "logging"))]
+                    {
+                        self.dom.handle_fast_propose_leader(payload);
+                    }
                 } else {
                     self.dom.handle_fast_propose(payload);
                 }
@@ -545,6 +565,7 @@ where
             id: request_key,
             deadline: self.dom.get_deadline(),
             dom_hash: 0, // fast-path: receivers compute the hash themselves via reply_fast_accepted
+            prev_idx: 0, // not used for fast-path entries
         };
         #[cfg(feature = "logging")]
         info!(

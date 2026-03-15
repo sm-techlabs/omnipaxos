@@ -153,16 +153,37 @@ via `is_chosen`. If yes, the leader decides via the slow path:
 1. Calls `set_decided_idx` locally.
 2. Sends `Decide(decided_idx, hash=0)` to all peers. **Hash = 0 is the slow-path sentinel** —
    followers skip the DOM hash check and commit unconditionally.
-3. Sends fallback `AcceptDecide` to any follower whose `accepted_idx` is behind the leader's,
+3. Sends a fallback `AcceptDecide` to any follower whose `accepted_idx` is behind the leader's,
    carrying all missing log entries. This also advances the leader's per-follower sequence-number
    counter, so any still-unreachable follower will detect a gap on reconnect and trigger Phase 1
    recovery.
+
+### Idempotency of fallback AcceptDecide
+
+A race exists between DOM buffer release and the resend timer. A follower may have already
+appended an entry via its own `tick()` (released from the early buffer) by the time the fallback
+`AcceptDecide` arrives. Without a guard, the follower would append the entry again, creating a
+duplicate.
+
+To prevent this, every slow-path `AcceptDecide` carries a **`prev_idx`** field: the Paxos log
+position immediately before the first entry in the message. When a follower processes a slow-path
+`AcceptDecide`, it checks its current `accepted_idx` against the range `[prev_idx, prev_idx +
+entries.len())`:
+
+- **All entries already present** (`accepted_idx >= prev_idx + entries.len()`): skip the append
+  entirely, only advance `decided_idx` if needed.
+- **Partial overlap** (`accepted_idx > prev_idx`): drain the already-held prefix from `entries`
+  before appending.
+- **No overlap**: append normally.
+
+Fast-path `FastPropose` messages set `prev_idx = 0` (unused — fast-path entries are handled
+exclusively through the DOM early buffer and are not de-duplicated this way).
 
 ```
 [P3 Ldr/Acc]  [SLOW_PATH][DECIDE] quorum met on resend; deciding accepted_idx=1
 [P3 Ldr/Acc]  [SEND][DECIDE]       to=1 decided_idx=1 hash=0
 [P3 Ldr/Acc]  [SEND][SLOW_PATH]    AcceptDecide fallback to=2 entries=1 decided_idx=1
-[P2 Fol/Acc]  [RECV][ACCEPT_DECIDE] accepted_idx=1 decided_idx=0
+[P2 Fol/Acc]  [ACCEPT_DECIDE][IDEMPOTENT] skipping duplicate: my_idx=1 entries=[0..1]
 [P2 Fol/Acc]  [RECV][DECIDE]       from=3 decided_idx=1 hash=0 → committed
 ```
 
@@ -185,12 +206,28 @@ A sequence-number gap (`DroppedPreceding` from `handle_sequence_num`) also trigg
 `reconnected`, for the case where a follower reconnects and receives a message with an ahead
 sequence number before seeing a `Decide`.
 
+### early_buffer is cleared on AcceptSync
+
+A follower may have received a `FastPropose` while it was in `(Follower, Recover)`. The message
+handler (`handle_fast_propose`) inserts the entry into `dom.early_buffer` regardless of phase,
+because no phase check is appropriate at the buffering stage. Later, `handle_acceptsync` delivers
+that same entry as part of the log suffix. Without a guard, `tick()` would subsequently pop the
+entry from `early_buffer` and append it a second time.
+
+`sync_to_log_position` (called from `handle_acceptsync`) now calls `early_buffer.clear()`. This
+is correct because:
+
+- Entries already in the AcceptSync suffix are in storage — they must not be appended again.
+- Entries not in the suffix were rejected by the leader's log sync — they are stale.
+- Any new fast-path entries will arrive as fresh `FastPropose` messages after the follower
+  re-enters `(Follower, Accept)`.
+
 ```
 [P7 Fol/---]  [RECOVER] gap detected from=6 → entering Recover phase, sending PrepareReq
 [P6 Ldr/Acc]  [SEND][PREPARE]      to=7 decided_idx=4 accepted_idx=4
 [P7 Fol/Pre]  [RECV][PREPARE]      from=6 → sending Promise
 [P6 Ldr/Acc]  [SEND][ACCEPT_SYNC]  to=7 decided_idx=4
-[P7 Fol/Acc]  [RECV][ACCEPT_SYNC]  from=6 → entering Accept phase
+[P7 Fol/Acc]  [RECV][ACCEPT_SYNC]  from=6 → entering Accept phase (early_buffer cleared)
 ```
 
 ---
@@ -204,5 +241,5 @@ sequence number before seeing a `Decide`.
 | Fast accept | `tick()` releases deadline | `FastAccepted` → leader, `FastReply` → coordinator | appended locally |
 | Fast decide (leader) | fast_quorum `FastAccepted` at leader | leader sets `decided_idx`, broadcasts `Decide(hash≠0)` | all committed |
 | Fast decide (coordinator) | fast_quorum `FastReply` at coordinator | coordinator sets `decided_idx` locally (1-RTT) | coordinator committed |
-| Slow decide | resend timer | `Decide(hash=0)` + fallback `AcceptDecide` | all committed |
-| Recovery | missing entries in `Decide` / seq-num gap | `PrepareReq` → `Prepare` → `Promise` → `AcceptSync` → `Accepted` | `Fol/Acc` |
+| Slow decide | resend timer | `Decide(hash=0)` + fallback `AcceptDecide` (idempotent via `prev_idx`) | all committed |
+| Recovery | missing entries in `Decide` / seq-num gap | `PrepareReq` → `Prepare` → `Promise` → `AcceptSync` (clears `early_buffer`) → `Accepted` | `Fol/Acc` |
