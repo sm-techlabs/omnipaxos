@@ -429,7 +429,27 @@ where
             // The leader applies deadline-reordering for late entries; followers do not.
             PaxosMsg::FastPropose(payload) => {
                 if self.state.0 == Role::Leader {
-                    self.dom.handle_fast_propose_leader(payload);
+                    #[cfg(feature = "logging")]
+                    {
+                        let original_deadline = payload.deadline;
+                        let (client_id, request_id) = payload.id;
+                        if let Some(rewritten_deadline) =
+                            self.dom.handle_fast_propose_leader(payload)
+                        {
+                            warn!(
+                                self.logger,
+                                "[DOM][FAST_PROPOSE_LEADER] client_id={} request_id={} deadline_rewrite={} -> {}",
+                                client_id,
+                                request_id,
+                                original_deadline,
+                                rewritten_deadline,
+                            );
+                        }
+                    }
+                    #[cfg(not(feature = "logging"))]
+                    {
+                        self.dom.handle_fast_propose_leader(payload);
+                    }
                 } else {
                     self.dom.handle_fast_propose(payload);
                 }

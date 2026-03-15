@@ -137,11 +137,15 @@ where
     /// reflects the original deadline.  When those acknowledgements arrive at
     /// the leader it will detect the hash mismatch and trigger recovery on
     /// those followers (see `handle_fast_accepted`).
-    pub fn handle_fast_propose_leader(&mut self, mut ac: AcceptDecide<T>) {
+    pub fn handle_fast_propose_leader(&mut self, mut ac: AcceptDecide<T>) -> Option<i64> {
         if ac.deadline <= self.last_released_timestamp {
             ac.deadline = self.last_released_timestamp + 1;
+            let rewritten_deadline = ac.deadline;
+            self.early_buffer.push(ac);
+            return Some(rewritten_deadline);
         }
         self.early_buffer.push(ac);
+        None
     }
 
     /// Handles a fast path reply
