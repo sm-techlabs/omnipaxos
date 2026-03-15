@@ -364,34 +364,6 @@ where
             .and_then(|idx| self.log_hashes.get(idx).copied())
     }
 
-    /// Corrects the hash chain at `decided_idx` to `correct_hash`, propagating
-    /// the XOR delta forward through every subsequent recorded position.
-    ///
-    /// This is needed when a follower accepted entries beyond `decided_idx`
-    /// using a locally-computed hash chain that diverged from the leader's at
-    /// exactly `decided_idx` (e.g. deadline reordering).  Patching in-place
-    /// preserves the validity of all subsequent entries.
-    ///
-    /// If `log_hashes` has no entry at `decided_idx` (the follower's chain
-    /// doesn't reach that far), `last_log_hash` is set directly.
-    pub fn patch_hash_at(&mut self, decided_idx: usize, correct_hash: u64) {
-        match self.get_hash_at(decided_idx) {
-            Some(old_hash) => {
-                let delta = old_hash ^ correct_hash;
-                let start = decided_idx - 1; // checked_sub safe: get_hash_at succeeded
-                for h in &mut self.log_hashes[start..] {
-                    *h ^= delta;
-                }
-                self.last_log_hash ^= delta;
-            }
-            None => {
-                // Chain doesn't reach decided_idx; follower has no recorded
-                // hashes beyond this point, so just set last_log_hash.
-                self.last_log_hash = correct_hash;
-            }
-        }
-    }
-
     fn fast_quorum_size(cluster_size: usize) -> usize {
         let non_leader_nodes = cluster_size.saturating_sub(1);
         1 + ((3 * non_leader_nodes + 3) / 4)
