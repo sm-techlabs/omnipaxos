@@ -1,0 +1,465 @@
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/pavlos/id2203/omnipaxos/omnipaxos/Cargo.toml
+workspace: /home/pavlos/id2203/omnipaxos/Cargo.toml
+warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
+package:   /home/pavlos/id2203/omnipaxos/omnipaxos_storage/Cargo.toml
+workspace: /home/pavlos/id2203/omnipaxos/Cargo.toml
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on package cache
+    Blocking waiting for file lock on build directory
+warning: unused variable: `msg_type`
+   --> omnipaxos/src/sequence_paxos/mod.rs:389:17
+    |
+389 |             let msg_type = match &m.msg {
+    |                 ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_msg_type`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `omnipaxos` (lib) generated 1 warning (run `cargo fix --lib -p omnipaxos` to apply 1 suggestion)
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> omnipaxos_storage/src/persistent_storage.rs:177:23
+    |
+177 |     fn get_log_handle(&self) -> ColumnFamilyRef {
+    |                       ^^^^^     ^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                       |
+    |                       the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+177 |     fn get_log_handle(&self) -> ColumnFamilyRef<'_> {
+    |                                                ++++
+
+warning: `omnipaxos_storage` (lib) generated 1 warning (run `cargo fix --lib -p omnipaxos_storage` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.40s
+warning: the following packages contain code that will be rejected by a future version of Rust: nom v4.2.3
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/dom_integration.rs (target/debug/deps/dom_integration-6a66daaf685ca40e)
+
+running 1 test
+
+[36m══════════════════════════════════════════════════════════════════════[0m
+[36m  ▶ BEGIN  seven_nodes_three_coordinators_deadline_ordering[0m
+[36m══════════════════════════════════════════════════════════════════════[0m
+Mar 15 21:08:30.380 INFO Starting network..., ctype: NetworkDispatcher, cid: e586b5e4-b57a-4ed3-aee9-47b976e9fa5e, system: KompactSystem, location: /home/pavlos/.cargo/git/checkouts/kompact-7275120e9ee87b90/4fd1fdc/core/src/dispatch/mod.rs:1084
+Mar 15 21:08:30.391 INFO Started network just fine., ctype: NetworkDispatcher, cid: e586b5e4-b57a-4ed3-aee9-47b976e9fa5e, system: KompactSystem, location: /home/pavlos/.cargo/git/checkouts/kompact-7275120e9ee87b90/4fd1fdc/core/src/dispatch/mod.rs:1086
+[31m[P1 ---/---][0m Mar 15 21:08:30.392 INFO  Ballot Leader Election component pid: 1 created!
+[31m[P1 ---/---][0m Mar 15 21:08:30.392 INFO  Paxos component pid: 1 created!
+[32m[P2 ---/---][0m Mar 15 21:08:30.392 INFO  Ballot Leader Election component pid: 2 created!
+[32m[P2 ---/---][0m Mar 15 21:08:30.393 INFO  Paxos component pid: 2 created!
+[33m[P3 ---/---][0m Mar 15 21:08:30.393 INFO  Ballot Leader Election component pid: 3 created!
+[33m[P3 ---/---][0m Mar 15 21:08:30.393 INFO  Paxos component pid: 3 created!
+[34m[P4 ---/---][0m Mar 15 21:08:30.394 INFO  Ballot Leader Election component pid: 4 created!
+[34m[P4 ---/---][0m Mar 15 21:08:30.394 INFO  Paxos component pid: 4 created!
+[35m[P5 ---/---][0m Mar 15 21:08:30.394 INFO  Ballot Leader Election component pid: 5 created!
+[35m[P5 ---/---][0m Mar 15 21:08:30.394 INFO  Paxos component pid: 5 created!
+[36m[P6 ---/---][0m Mar 15 21:08:30.395 INFO  Ballot Leader Election component pid: 6 created!
+[36m[P6 ---/---][0m Mar 15 21:08:30.395 INFO  Paxos component pid: 6 created!
+[31m[P7 ---/---][0m Mar 15 21:08:30.395 INFO  Ballot Leader Election component pid: 7 created!
+[31m[P7 ---/---][0m Mar 15 21:08:30.395 INFO  Paxos component pid: 7 created!
+[31m[P7 Ldr/Pre][0m Mar 15 21:08:30.595 INFO  [LEADER]
+		elected ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } → entering Prepare phase, sending Prepare to 6 peers
+[36m[P6 Fol/Pre][0m Mar 15 21:08:30.595 INFO  [RECV][PREPARE]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } their_decided_idx=0 their_accepted_idx=0 → sending Promise
+[32m[P2 Fol/Pre][0m Mar 15 21:08:30.595 INFO  [RECV][PREPARE]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } their_decided_idx=0 their_accepted_idx=0 → sending Promise
+[31m[P1 Fol/Pre][0m Mar 15 21:08:30.595 INFO  [RECV][PREPARE]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } their_decided_idx=0 their_accepted_idx=0 → sending Promise
+[35m[P5 Fol/Pre][0m Mar 15 21:08:30.595 INFO  [RECV][PREPARE]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } their_decided_idx=0 their_accepted_idx=0 → sending Promise
+[34m[P4 Fol/Pre][0m Mar 15 21:08:30.595 INFO  [RECV][PREPARE]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } their_decided_idx=0 their_accepted_idx=0 → sending Promise
+[33m[P3 Fol/Pre][0m Mar 15 21:08:30.595 INFO  [RECV][PREPARE]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } their_decided_idx=0 their_accepted_idx=0 → sending Promise
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.596 INFO  [LEADER]
+		majority promises received → Accept phase, accepted_idx=0 sending AcceptSync to 3 followers
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.596 INFO  [SEND][ACCEPT_SYNC]
+		to=1 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 }
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.596 INFO  [SEND][ACCEPT_SYNC]
+		to=2 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 }
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.596 INFO  [SEND][ACCEPT_SYNC]
+		to=5 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 }
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.596 INFO  [SEND][ACCEPT_SYNC]
+		to=3 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 }
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.596 INFO  [SEND][ACCEPT_SYNC]
+		to=4 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 }
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.596 INFO  [SEND][ACCEPT_SYNC]
+		to=6 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 }
+[31m[P1 ---/---][0m Mar 15 21:08:30.597 INFO  [BLE]
+		leader changed from=Ballot { config_id: 1, n: 1, priority: 0, pid: 1 } to=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 }
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.597 INFO  [RECV][ACCEPT_SYNC]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 new_accepted_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 } → entering Accept phase
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.597 INFO  [RECV][ACCEPT_SYNC]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 new_accepted_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 } → entering Accept phase
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.597 INFO  [RECV][ACCEPT_SYNC]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 new_accepted_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 } → entering Accept phase
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.597 INFO  [RECV][ACCEPT_SYNC]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 new_accepted_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 } → entering Accept phase
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.597 INFO  [RECV][ACCEPT_SYNC]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 new_accepted_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 } → entering Accept phase
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.597 INFO  [RECV][ACCEPTED]
+		from=3 accepted_idx=0 decided_idx=0 quorum_progress=7/4
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.597 INFO  [RECV][ACCEPT_SYNC]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=0 new_accepted_idx=0 seq_num=SequenceNumber { session: 1, counter: 1 } → entering Accept phase
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.598 INFO  [RECV][ACCEPTED]
+		from=5 accepted_idx=0 decided_idx=0 quorum_progress=7/4
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.599 INFO  [RECV][ACCEPTED]
+		from=1 accepted_idx=0 decided_idx=0 quorum_progress=7/4
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.599 INFO  [RECV][ACCEPTED]
+		from=2 accepted_idx=0 decided_idx=0 quorum_progress=7/4
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.599 INFO  [RECV][ACCEPTED]
+		from=4 accepted_idx=0 decided_idx=0 quorum_progress=7/4
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.599 INFO  [RECV][ACCEPTED]
+		from=6 accepted_idx=0 decided_idx=0 quorum_progress=7/4
+[32m[P2 ---/---][0m Mar 15 21:08:30.601 INFO  [BLE]
+		leader changed from=Ballot { config_id: 1, n: 1, priority: 0, pid: 2 } to=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 }
+[34m[P4 ---/---][0m Mar 15 21:08:30.601 INFO  [BLE]
+		leader changed from=Ballot { config_id: 1, n: 1, priority: 0, pid: 4 } to=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 }
+[33m[P3 ---/---][0m Mar 15 21:08:30.601 INFO  [BLE]
+		leader changed from=Ballot { config_id: 1, n: 1, priority: 0, pid: 3 } to=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 }
+[35m[P5 ---/---][0m Mar 15 21:08:30.601 INFO  [BLE]
+		leader changed from=Ballot { config_id: 1, n: 1, priority: 0, pid: 5 } to=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 }
+[36m[P6 ---/---][0m Mar 15 21:08:30.601 INFO  [BLE]
+		leader changed from=Ballot { config_id: 1, n: 1, priority: 0, pid: 6 } to=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 }
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=1000 coordinator=2 deadline=1773605310647731
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [INFO][FAST_PATH]
+		leader appended coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [SEND][FAST_REPLY]
+		to=2 from=7 request=1000 accepted_idx=Some(1) hash=2408299770348053635
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=2000 coordinator=3 deadline=1773605310697731
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [INFO][FAST_PATH]
+		leader appended coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [SEND][FAST_REPLY]
+		to=3 from=7 request=2000 accepted_idx=Some(2) hash=1753302654153156178
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=3000 coordinator=4 deadline=1773605310747731
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [INFO][FAST_PATH]
+		leader appended coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.795 INFO  [SEND][FAST_REPLY]
+		to=4 from=7 request=3000 accepted_idx=Some(3) hash=1099830630972478843
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.797 INFO  [RECV][FAST_ACCEPTED]
+		from=1 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.797 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=2 request=1000 accepted_idx=1 pending=2/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.797 INFO  [RECV][FAST_ACCEPTED]
+		from=1 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.797 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=3 request=2000 accepted_idx=2 pending=2/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.798 INFO  [RECV][FAST_ACCEPTED]
+		from=1 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.798 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=4 request=3000 accepted_idx=3 pending=2/6
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.797 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=1000 coordinator=2 deadline=1773605310647731
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.798 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.798 INFO  [SEND][FAST_REPLY]
+		to=2 from=1 request=1000 accepted_idx=Some(1) hash=2408299770348053635
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.798 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=2000 coordinator=3 deadline=1773605310697731
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.798 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.798 INFO  [SEND][FAST_REPLY]
+		to=3 from=1 request=2000 accepted_idx=Some(2) hash=1753302654153156178
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.798 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=3000 coordinator=4 deadline=1773605310747731
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.798 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.798 INFO  [SEND][FAST_REPLY]
+		to=4 from=1 request=3000 accepted_idx=Some(3) hash=1099830630972478843
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=1000 coordinator=2 deadline=1773605310647731
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=2000 coordinator=3 deadline=1773605310697731
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=1000 coordinator=2 deadline=1773605310647731
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_REPLY]
+		to=2 from=3 request=1000 accepted_idx=Some(1) hash=2408299770348053635
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=2000 coordinator=3 deadline=1773605310697731
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [RECV][FAST_REPLY][LOCAL]
+		from=3 request=2000 accepted_idx=Some(2) hash=1753302654153156178
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=3000 coordinator=4 deadline=1773605310747731
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_REPLY]
+		to=4 from=3 request=3000 accepted_idx=Some(3) hash=1099830630972478843
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=3 request=2000 accepted_idx=1 hash=4125020838213468881
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_REPLY]
+		to=3 from=2 request=2000 accepted_idx=Some(1) hash=4125020838213468881
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=3000 coordinator=4 deadline=1773605310747731
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=4 request=3000 accepted_idx=2 hash=3326081773249851896
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_REPLY]
+		to=4 from=2 request=3000 accepted_idx=Some(2) hash=3326081773249851896
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.802 INFO  [RECV][FAST_ACCEPTED]
+		from=2 coordinator=3 request=2000 accepted_idx=1 hash=4125020838213468881
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [FAST_ACCEPTED][HASH_MISMATCH]
+		coordinator=3 request=2000 from=2 accepted_idx=1 follower_hash=4125020838213468881 our_hash=2408299770348053635 → sending recovery Decide
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][DECIDE]
+		to=2 decided_idx=1 hash=2408299770348053635 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][FAST_ACCEPTED]
+		from=2 coordinator=4 request=3000 accepted_idx=2 hash=3326081773249851896
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][DECIDE]
+		coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=1000 coordinator=2 deadline=1773605310647731
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.802 INFO  [SEND][FAST_REPLY]
+		to=2 from=5 request=1000 accepted_idx=Some(1) hash=2408299770348053635
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=2000 coordinator=3 deadline=1773605310697731
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_REPLY]
+		to=2 from=4 request=1000 accepted_idx=Some(1) hash=2408299770348053635
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=2000 coordinator=3 deadline=1773605310697731
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_REPLY]
+		to=3 from=5 request=2000 accepted_idx=Some(2) hash=1753302654153156178
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=3000 coordinator=4 deadline=1773605310747731
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_REPLY]
+		to=3 from=4 request=2000 accepted_idx=Some(2) hash=1753302654153156178
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=3000 coordinator=4 deadline=1773605310747731
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_REPLY]
+		to=4 from=5 request=3000 accepted_idx=Some(3) hash=1099830630972478843
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=1000 coordinator=2 deadline=1773605310647731
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][FAST_REPLY][LOCAL]
+		from=4 request=3000 accepted_idx=Some(3) hash=1099830630972478843
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_REPLY]
+		to=2 from=6 request=1000 accepted_idx=Some(1) hash=2408299770348053635
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][DECIDE]
+		coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][DECIDE]
+		coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [FAST_ACCEPTED][HASH_MISMATCH]
+		coordinator=4 request=3000 from=2 accepted_idx=2 follower_hash=3326081773249851896 our_hash=1753302654153156178 → sending recovery Decide
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][DECIDE]
+		to=2 decided_idx=2 hash=1753302654153156178 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][FAST_ACCEPTED]
+		from=3 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=2 request=1000 accepted_idx=1 pending=3/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][FAST_ACCEPTED]
+		from=3 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=3 request=2000 accepted_idx=2 pending=3/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][FAST_ACCEPTED]
+		from=3 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=1 hash=2408299770348053635 → committed
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=2000 coordinator=3 deadline=1773605310697731
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=2 hash=1753302654153156178 → committed
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.803 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=4 request=3000 accepted_idx=3 pending=3/6
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[35m[P5 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=3 hash=1099830630972478843 → committed
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_REPLY]
+		to=3 from=6 request=2000 accepted_idx=Some(2) hash=1753302654153156178
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=1 hash=2408299770348053635 → committed
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [INFO][FAST_PATH][BUFFER]
+		releasing request=3000 coordinator=4 deadline=1773605310747731
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=1 hash=2408299770348053635 → committed
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=1 hash=2408299770348053635 → committed
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_ACCEPTED]
+		to=7 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=2 hash=1753302654153156178 → committed
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=2 hash=1753302654153156178 → committed
+[33m[P3 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=3 hash=1099830630972478843 → committed
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [SEND][FAST_REPLY]
+		to=4 from=6 request=3000 accepted_idx=Some(3) hash=1099830630972478843
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=2 hash=1753302654153156178 → committed
+[31m[P1 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=3 hash=1099830630972478843 → committed
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=1 hash=2408299770348053635 → committed
+[32m[P2 Fol/Rec][0m Mar 15 21:08:30.803 WARN  [DECIDE][DOM_HASH]
+		hash mismatch at decided_idx=1: ours=4125020838213468881 leader=2408299770348053635 → truncated log to decided_idx=1, triggering Phase 1 recovery
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=2 hash=1753302654153156178 → committed
+[32m[P2 Fol/Rec][0m Mar 15 21:08:30.803 INFO  [RECOVER]
+		gap detected from=7 → entering Recover phase, sending PrepareReq
+[34m[P4 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=3 hash=1099830630972478843 → committed
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [RECV][FAST_ACCEPTED]
+		from=4 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=2 request=1000 accepted_idx=1 pending=4/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [RECV][FAST_ACCEPTED]
+		from=4 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=3 request=2000 accepted_idx=2 pending=4/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [RECV][FAST_ACCEPTED]
+		from=4 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[36m[P6 Fol/Acc][0m Mar 15 21:08:30.803 INFO  [RECV][DECIDE]
+		from=7 decided_idx=3 hash=1099830630972478843 → committed
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=4 request=3000 accepted_idx=3 pending=4/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [RECV][FAST_ACCEPTED]
+		from=5 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=2 request=1000 accepted_idx=1 pending=5/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [RECV][FAST_ACCEPTED]
+		from=5 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=3 request=2000 accepted_idx=2 pending=5/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [RECV][FAST_ACCEPTED]
+		from=5 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=4 request=3000 accepted_idx=3 pending=5/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [RECV][FAST_ACCEPTED]
+		from=6 coordinator=2 request=1000 accepted_idx=1 hash=2408299770348053635
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=2 request=1000 accepted_idx=1 fast_quorum_reached=6/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [INFO][FAST_DECIDE]
+		decided_idx=1 hash=2408299770348053635 broadcasting Decide
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=1 decided_idx=1 hash=2408299770348053635 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=2 decided_idx=1 hash=2408299770348053635 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=3 decided_idx=1 hash=2408299770348053635 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=4 decided_idx=1 hash=2408299770348053635 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=5 decided_idx=1 hash=2408299770348053635 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=6 decided_idx=1 hash=2408299770348053635 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [RECV][FAST_ACCEPTED]
+		from=6 coordinator=3 request=2000 accepted_idx=2 hash=1753302654153156178
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=3 request=2000 accepted_idx=2 fast_quorum_reached=6/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [INFO][FAST_DECIDE]
+		decided_idx=2 hash=1753302654153156178 broadcasting Decide
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=1 decided_idx=2 hash=1753302654153156178 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=2 decided_idx=2 hash=1753302654153156178 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.804 INFO  [SEND][DECIDE]
+		to=3 decided_idx=2 hash=1753302654153156178 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [SEND][DECIDE]
+		to=4 decided_idx=2 hash=1753302654153156178 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [SEND][DECIDE]
+		to=5 decided_idx=2 hash=1753302654153156178 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [SEND][DECIDE]
+		to=6 decided_idx=2 hash=1753302654153156178 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [RECV][FAST_ACCEPTED]
+		from=6 coordinator=4 request=3000 accepted_idx=3 hash=1099830630972478843
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [FAST_ACCEPTED][QUORUM]
+		coordinator=4 request=3000 accepted_idx=3 fast_quorum_reached=6/6
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [INFO][FAST_DECIDE]
+		decided_idx=3 hash=1099830630972478843 broadcasting Decide
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [SEND][DECIDE]
+		to=1 decided_idx=3 hash=1099830630972478843 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [SEND][DECIDE]
+		to=2 decided_idx=3 hash=1099830630972478843 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.805 INFO  [SEND][DECIDE]
+		to=3 decided_idx=3 hash=1099830630972478843 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.806 INFO  [SEND][DECIDE]
+		to=4 decided_idx=3 hash=1099830630972478843 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.806 INFO  [SEND][DECIDE]
+		to=5 decided_idx=3 hash=1099830630972478843 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.806 INFO  [SEND][DECIDE]
+		to=6 decided_idx=3 hash=1099830630972478843 resend=false
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.806 INFO  [SEND][PREPARE]
+		to=2 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=3 accepted_idx=3
+[32m[P2 Fol/Pre][0m Mar 15 21:08:30.806 INFO  [RECV][PREPARE]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } their_decided_idx=3 their_accepted_idx=3 → sending Promise
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.806 INFO  [SEND][ACCEPT_SYNC]
+		to=2 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=3 seq_num=SequenceNumber { session: 2, counter: 1 }
+[32m[P2 Fol/Acc][0m Mar 15 21:08:30.807 INFO  [RECV][ACCEPT_SYNC]
+		from=7 ballot=Ballot { config_id: 1, n: 1, priority: 0, pid: 7 } decided_idx=3 new_accepted_idx=3 seq_num=SequenceNumber { session: 2, counter: 1 } → entering Accept phase
+[31m[P7 Ldr/Acc][0m Mar 15 21:08:30.808 INFO  [RECV][ACCEPTED]
+		from=2 accepted_idx=3 decided_idx=3 quorum_progress=7/4
+
+thread 'seven_nodes_three_coordinators_deadline_ordering' (375494) panicked at omnipaxos/tests/dom_integration.rs:73:5:
+Condition was not satisfied within 10s
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+[35m┌─ Final logs for seven_nodes_three_coordinators_deadline_ordering[0m
+[35m├─ Node 1  (decided_idx=3, entries=3, dom_hash=0x0f436221b835557b)[0m
+│   [ 0] DECIDED    Value { id: 10 }
+│   [ 1] DECIDED    Value { id: 20 }
+│   [ 2] DECIDED    Value { id: 30 }
+[35m├─ Node 2  (decided_idx=3, entries=3, dom_hash=0x0f436221b835557b)[0m
+│   [ 0] DECIDED    Value { id: 20 }
+│   [ 1] DECIDED    Value { id: 20 }
+│   [ 2] DECIDED    Value { id: 30 }
+[35m├─ Node 3  (decided_idx=3, entries=3, dom_hash=0x0f436221b835557b)[0m
+│   [ 0] DECIDED    Value { id: 10 }
+│   [ 1] DECIDED    Value { id: 20 }
+│   [ 2] DECIDED    Value { id: 30 }
+[35m├─ Node 4  (decided_idx=3, entries=3, dom_hash=0x0f436221b835557b)[0m
+│   [ 0] DECIDED    Value { id: 10 }
+│   [ 1] DECIDED    Value { id: 20 }
+│   [ 2] DECIDED    Value { id: 30 }
+[35m├─ Node 5  (decided_idx=3, entries=3, dom_hash=0x0f436221b835557b)[0m
+│   [ 0] DECIDED    Value { id: 10 }
+│   [ 1] DECIDED    Value { id: 20 }
+│   [ 2] DECIDED    Value { id: 30 }
+[35m├─ Node 6  (decided_idx=3, entries=3, dom_hash=0x0f436221b835557b)[0m
+│   [ 0] DECIDED    Value { id: 10 }
+│   [ 1] DECIDED    Value { id: 20 }
+│   [ 2] DECIDED    Value { id: 30 }
+[35m├─ Node 7  (decided_idx=3, entries=3, dom_hash=0x0f436221b835557b)[0m
+│   [ 0] DECIDED    Value { id: 10 }
+│   [ 1] DECIDED    Value { id: 20 }
+│   [ 2] DECIDED    Value { id: 30 }
+[35m└─ End final logs[0m
+Mar 15 21:08:40.816 INFO Stopping network..., ctype: NetworkDispatcher, cid: e586b5e4-b57a-4ed3-aee9-47b976e9fa5e, system: KompactSystem, location: /home/pavlos/.cargo/git/checkouts/kompact-7275120e9ee87b90/4fd1fdc/core/src/dispatch/mod.rs:1096
+Mar 15 21:08:40.816 INFO Stopped network., ctype: NetworkDispatcher, cid: e586b5e4-b57a-4ed3-aee9-47b976e9fa5e, system: KompactSystem, location: /home/pavlos/.cargo/git/checkouts/kompact-7275120e9ee87b90/4fd1fdc/core/src/dispatch/mod.rs:1098
+Mar 15 21:08:40.816 INFO Killing network..., ctype: NetworkDispatcher, cid: e586b5e4-b57a-4ed3-aee9-47b976e9fa5e, system: KompactSystem, location: /home/pavlos/.cargo/git/checkouts/kompact-7275120e9ee87b90/4fd1fdc/core/src/dispatch/mod.rs:1103
+Mar 15 21:08:40.816 INFO Killed network., ctype: NetworkDispatcher, cid: e586b5e4-b57a-4ed3-aee9-47b976e9fa5e, system: KompactSystem, location: /home/pavlos/.cargo/git/checkouts/kompact-7275120e9ee87b90/4fd1fdc/core/src/dispatch/mod.rs:1105
+Could not send Cancel msg: "SendError(..)"
+Could not send Cancel msg: "SendError(..)"
+Could not send Cancel msg: "SendError(..)"
+Could not send Cancel msg: "SendError(..)"
+Could not send Cancel msg: "SendError(..)"
+Could not send Cancel msg: "SendError(..)"
+Could not send Cancel msg: "SendError(..)"
+test seven_nodes_three_coordinators_deadline_ordering ... FAILED
+
+failures:
+
+failures:
+    seven_nodes_three_coordinators_deadline_ordering
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 19 filtered out; finished in 10.44s
+
+error: test failed, to rerun pass `-p omnipaxos --test dom_integration`
