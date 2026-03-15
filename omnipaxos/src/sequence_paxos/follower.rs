@@ -13,6 +13,15 @@ where
     pub(crate) fn handle_prepare(&mut self, prep: Prepare, from: NodeId) {
         let old_promise = self.internal_storage.get_promise();
         if old_promise < prep.n || (old_promise == prep.n && self.state.1 == Phase::Recover) {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[RECV][PREPARE] from={} ballot={:?} their_decided_idx={} their_accepted_idx={} → sending Promise",
+                from,
+                prep.n,
+                prep.decided_idx,
+                prep.accepted_idx,
+            );
             // Flush any pending writes
             // Don't have to handle flushed entries here because we will sync with followers
             let _ = self.internal_storage.flush_batch().expect(WRITE_ERROR_MSG);
@@ -20,6 +29,8 @@ where
                 .set_promise(prep.n)
                 .expect(WRITE_ERROR_MSG);
             self.state = (Role::Follower, Phase::Prepare);
+            #[cfg(feature = "logging")]
+            self.update_state_label();
             self.current_seq_num = SequenceNumber::default();
             let na = self.internal_storage.get_accepted_round();
             let accepted_idx = self.internal_storage.get_accepted_idx();
@@ -65,7 +76,20 @@ where
                 accepted_idx: new_accepted_idx,
             };
             self.state = (Role::Follower, Phase::Accept);
+            #[cfg(feature = "logging")]
+            self.update_state_label();
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[RECV][ACCEPT_SYNC] from={} ballot={:?} decided_idx={} new_accepted_idx={} seq_num={:?} → entering Accept phase",
+                from,
+                accsync.n,
+                accsync.decided_idx,
+                new_accepted_idx,
+                accsync.seq_num,
+            );
             self.current_seq_num = accsync.seq_num;
+            self.dom.last_log_hash = accsync.dom_hash;
             let cached_idx = self.outgoing.len();
             self.latest_accepted_meta = Some((accsync.n, cached_idx));
             self.outgoing.push(Message::SequencePaxos(PaxosMessage {
@@ -85,11 +109,49 @@ where
         }
     }
 
-    pub(crate) fn handle_acceptdecide(&mut self, acc_dec: AcceptDecide<T>) {
-        if self.check_valid_ballot(acc_dec.n)
+    pub(crate) fn handle_acceptdecide(
+        &mut self,
+        acc_dec: AcceptDecide<T>,
+        is_from_early_buffer: bool,
+    ) {
+        let expected_sequence = if is_from_early_buffer {
+            true
+        } else {
+            self.handle_sequence_num(acc_dec.seq_num, acc_dec.n.pid) == MessageStatus::Expected
+        };
+
+        if (is_from_early_buffer || self.check_valid_ballot(acc_dec.n))
             && self.state == (Role::Follower, Phase::Accept)
-            && self.handle_sequence_num(acc_dec.seq_num, acc_dec.n.pid) == MessageStatus::Expected
+            && expected_sequence
         {
+            // Capture fields before entries are moved
+            let n = acc_dec.n;
+            let decided_idx = acc_dec.decided_idx;
+
+            // Fast-path entries bypass the seq_num ordering check, so we must
+            // explicitly guard against accepting an entry at the wrong log
+            // position.  If our accepted_idx is behind the decided_idx carried
+            // in the message, we have missed entries that were already decided
+            // and must recover before appending anything.
+            if is_from_early_buffer
+                && self.internal_storage.get_accepted_idx() < decided_idx
+            {
+                #[cfg(feature = "logging")]
+                warn!(
+                    self.logger,
+                    "[FAST_PATH] stale log: accepted_idx={} < decided_idx={} coordinator={} \
+                     → discarding fast-path entry and triggering recovery",
+                    self.internal_storage.get_accepted_idx(),
+                    decided_idx,
+                    n.pid,
+                );
+                self.reconnected(n.pid);
+                return;
+            }
+            let deadline = acc_dec.deadline;
+            let id = acc_dec.id;
+            let dom_hash = acc_dec.dom_hash;
+
             #[cfg(not(feature = "unicache"))]
             let entries = acc_dec.entries;
             #[cfg(feature = "unicache")]
@@ -98,13 +160,27 @@ where
                 .internal_storage
                 .append_entries_and_get_accepted_idx(entries)
                 .expect(WRITE_ERROR_MSG);
-            let flushed_after_decide =
-                self.update_decided_idx_and_get_accepted_idx(acc_dec.decided_idx);
+            let flushed_after_decide = self.update_decided_idx_and_get_accepted_idx(decided_idx);
             if flushed_after_decide.is_some() {
                 new_accepted_idx = flushed_after_decide;
             }
             if let Some(idx) = new_accepted_idx {
-                self.reply_accepted(acc_dec.n, idx);
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[RECV][ACCEPT_DECIDE] accepted_idx={} decided_idx={} fast_path={}",
+                    idx,
+                    decided_idx,
+                    is_from_early_buffer,
+                );
+                if is_from_early_buffer {
+                    self.reply_fast_accepted(idx, deadline, id);
+                } else {
+                    // Slow-path: adopt the leader's DOM hash so our hash stays
+                    // consistent with nodes that accepted the same entries via fast path.
+                    self.dom.last_log_hash = dom_hash;
+                    self.reply_accepted(n, idx);
+                }
             }
         }
     }
@@ -130,6 +206,54 @@ where
             && self.state.1 == Phase::Accept
             && self.handle_sequence_num(dec.seq_num, dec.n.pid) == MessageStatus::Expected
         {
+            // If the follower is missing entries that have already been decided, it
+            // cannot safely advance its decided_idx — trigger Phase 1 recovery so
+            // AcceptSync delivers the missing log suffix.
+            if dec.decided_idx > self.internal_storage.get_accepted_idx() {
+                #[cfg(feature = "logging")]
+                warn!(
+                    self.logger,
+                    "[DECIDE] missing entries: accepted_idx={} < decided_idx={}. \
+                     Initiating Phase 1 recovery.",
+                    self.internal_storage.get_accepted_idx(),
+                    dec.decided_idx,
+                );
+                self.reconnected(dec.n.pid);
+                return;
+            }
+
+            // Fast-path DOM hash correction: compare the leader's hash for
+            // decided_idx against the follower's hash *at that same position*,
+            // not against last_log_hash.  The follower may have fast-accepted
+            // entries beyond decided_idx whose hashes are still valid; blindly
+            // overwriting last_log_hash would corrupt them.
+            if dec.hash != 0 {
+                let our_hash_at_decided = self
+                    .dom
+                    .get_hash_at(dec.decided_idx)
+                    .unwrap_or(self.dom.last_log_hash);
+                if dec.hash != our_hash_at_decided {
+                    #[cfg(feature = "logging")]
+                    info!(
+                        self.logger,
+                        "[DECIDE][DOM_HASH] patching hash chain at decided_idx={}: \
+                         {} → {} (deadline reorder correction)",
+                        dec.decided_idx,
+                        our_hash_at_decided,
+                        dec.hash,
+                    );
+                    self.dom.patch_hash_at(dec.decided_idx, dec.hash);
+                }
+            }
+
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[RECV][DECIDE] from={} decided_idx={} hash={} → committed",
+                dec.n.pid,
+                dec.decided_idx,
+                dec.hash,
+            );
             let new_accepted_idx = self.update_decided_idx_and_get_accepted_idx(dec.decided_idx);
             if let Some(idx) = new_accepted_idx {
                 self.reply_accepted(dec.n, idx);
@@ -170,8 +294,66 @@ where
                     to: n.pid,
                     msg: PaxosMsg::Accepted(accepted),
                 }));
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[SEND][ACCEPTED] to={} accepted_idx={}",
+                    n.pid,
+                    accepted_idx,
+                );
             }
         }
+    }
+
+    pub(crate) fn handle_released_fast_entry_follower(
+        &mut self,
+        prop_msg: AcceptDecide<T>,
+    ) -> FastReply<T> {
+        let coordinator_id = prop_msg.id.0;
+        let request_id = prop_msg.id.1;
+        self.handle_acceptdecide(prop_msg, true);
+        let accepted_idx = self.internal_storage.get_accepted_idx();
+        let hash = self
+            .dom
+            .get_hash_at(accepted_idx)
+            .unwrap_or(self.dom.last_log_hash);
+
+        FastReply {
+            n: self.get_promise(),
+            coordinator_id,
+            request_id,
+            replica_id: self.pid,
+            accepted_idx: Some(accepted_idx),
+            result: None,
+            hash,
+        }
+    }
+
+    fn reply_fast_accepted(&mut self, accepted_idx: usize, _deadline: i64, id: (u64, u64)) {
+        let hash = self
+            .dom
+            .record_accepted_metadata(accepted_idx);
+        let fast_accepted = FastAccepted {
+            n: self.get_promise(),
+            coordinator_id: id.0,
+            request_id: id.1,
+            accepted_idx,
+            hash,
+        };
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[SEND][FAST_ACCEPTED] to={} request={} accepted_idx={} hash={}",
+            self.get_current_leader(),
+            id.1,
+            accepted_idx,
+            hash,
+        );
+        self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+            from: self.pid,
+            to: self.get_current_leader(),
+            msg: PaxosMsg::FastAccepted(fast_accepted),
+        }));
     }
 
     fn get_latest_accepted_message(&mut self, n: Ballot) -> Option<&mut Accepted> {
@@ -231,7 +413,17 @@ where
         let msg_status = self.current_seq_num.check_msg_status(seq_num);
         match msg_status {
             MessageStatus::Expected => self.current_seq_num = seq_num,
-            MessageStatus::DroppedPreceding => self.reconnected(from),
+            MessageStatus::DroppedPreceding => {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[SEQ_GAP] expected={} got={:?} from={} → triggering recovery",
+                    self.current_seq_num.counter + 1,
+                    seq_num,
+                    from,
+                );
+                self.reconnected(from);
+            }
             MessageStatus::Outdated => (),
         };
         msg_status
@@ -255,6 +447,8 @@ where
                         #[cfg(feature = "logging")]
                         warn!(self.logger, "In Prepare phase without a cached promise!");
                         self.state = (Role::Follower, Phase::Recover);
+                        #[cfg(feature = "logging")]
+                        self.update_state_label();
                         self.send_preparereq_to_all_peers();
                     }
                 }

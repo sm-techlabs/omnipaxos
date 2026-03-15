@@ -75,6 +75,10 @@ pub mod sequence_paxos {
         /// The log update which the follower applies to its log in order to sync
         /// with the leader.
         pub log_sync: LogSync<T>,
+        /// The leader's cumulative DOM log hash after the sync.  The follower must
+        /// adopt this value so its hash stays consistent with nodes that applied
+        /// the same entries via the fast path.
+        pub dom_hash: u64,
         #[cfg(feature = "unicache")]
         /// The UniCache of the leader
         pub unicache: T::UniCache,
@@ -103,14 +107,19 @@ pub mod sequence_paxos {
         pub deadline: i64,
         /// id is coordinator_id then request_id, used to find in the late buffer
         pub id: (u64, u64),
+        /// The leader's cumulative DOM log hash after appending these entries.
+        /// Followers that accept via the slow path adopt this value so their hash
+        /// stays consistent with nodes that applied the same entries via the fast path.
+        /// Set to 0 for FastPropose messages (fast-path followers compute the hash themselves).
+        pub dom_hash: u64,
     }
     /// Thanks Gemini
     /// These let us use AcceptDecide with the BinaryHeap
     use std::cmp::Ordering; // This did not work at the top of the file, idk why
 
-    impl<T> PartialEq for AcceptDecide<T> 
-    where 
-        T: Entry 
+    impl<T> PartialEq for AcceptDecide<T>
+    where
+        T: Entry,
     {
         fn eq(&self, other: &Self) -> bool {
             self.deadline == other.deadline && self.id == other.id
@@ -119,25 +128,27 @@ pub mod sequence_paxos {
 
     impl<T> Eq for AcceptDecide<T> where T: Entry {}
 
-    impl<T> PartialOrd for AcceptDecide<T> 
-    where 
-        T: Entry 
+    impl<T> PartialOrd for AcceptDecide<T>
+    where
+        T: Entry,
     {
         fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
             Some(self.cmp(other))
         }
     }
 
-    impl<T> Ord for AcceptDecide<T> 
-    where 
-        T: Entry 
+    impl<T> Ord for AcceptDecide<T>
+    where
+        T: Entry,
     {
         fn cmp(&self, other: &Self) -> Ordering {
-            // We reverse the comparison here (other vs self) 
+            // We reverse the comparison here (other vs self)
             // to turn the Max-Heap into a Min-Heap for deadlines.
-            other.deadline.cmp(&self.deadline)
+            other
+                .deadline
+                .cmp(&self.deadline)
                 // Tie-breaker: use ID if deadlines are equal
-                .then_with(|| other.id.cmp(&self.id))
+                .then_with(|| self.id.cmp(&other.id))
         }
     }
 
@@ -151,6 +162,22 @@ pub mod sequence_paxos {
         pub accepted_idx: usize,
     }
 
+    /// Message sent by follower to leader when entries have been accepted on the fast path.
+    #[derive(Copy, Clone, Debug)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+    pub struct FastAccepted {
+        /// The current round.
+        pub n: Ballot,
+        /// The coordinator that originated this fast-path request.
+        pub coordinator_id: u64,
+        /// The request identifier assigned by the coordinator.
+        pub request_id: u64,
+        /// The accepted index.
+        pub accepted_idx: usize,
+        /// Hash of the follower's log metadata up to `accepted_idx`.
+        pub hash: u64,
+    }
+
     /// Message sent by leader to followers to decide up to a certain index in the log.
     #[derive(Copy, Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -161,6 +188,8 @@ pub mod sequence_paxos {
         pub seq_num: SequenceNumber,
         /// The decided index.
         pub decided_idx: usize,
+        /// Hash of the leader's log metadata up to `decided_idx`.
+        pub hash: u64,
     }
 
     /// Message sent by leader to followers to accept a StopSign
@@ -196,20 +225,24 @@ pub mod sequence_paxos {
     /// Fast Reply
     #[derive(Clone, Debug)]
     #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-    pub struct FastReply<T> 
-    where 
+    pub struct FastReply<T>
+    where
         T: Entry,
     {
         /// current round
-       pub n: Ballot,
-       /// request id
-       pub request_id: u64,
-       /// id of replica sending
-       pub replica_id: u64,
-       /// result only if leader (result fo state machine update)
-       pub result: Option<Vec<T>>,
-       /// hash of log
-       pub hash: u64, 
+        pub n: Ballot,
+        /// coordinator that originated this fast-path request
+        pub coordinator_id: u64,
+        /// request id
+        pub request_id: u64,
+        /// id of replica sending
+        pub replica_id: u64,
+        /// accepted index chosen by the leader for this request
+        pub accepted_idx: Option<usize>,
+        /// result only if leader (result fo state machine update)
+        pub result: Option<Vec<T>>,
+        /// hash of log
+        pub hash: u64,
     }
 
     //// DOM Sync
@@ -241,6 +274,7 @@ pub mod sequence_paxos {
         AcceptSync(AcceptSync<T>),
         AcceptDecide(AcceptDecide<T>),
         Accepted(Accepted),
+        FastAccepted(FastAccepted),
         NotAccepted(NotAccepted),
         Decide(Decide),
         /// Forward client proposals to the leader.

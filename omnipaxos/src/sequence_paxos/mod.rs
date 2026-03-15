@@ -1,7 +1,8 @@
 use super::{ballot_leader_election::Ballot, messages::sequence_paxos::*, util::LeaderState};
 #[cfg(feature = "logging")]
-use crate::utils::logger::create_logger;
+use crate::utils::logger::{create_logger, StateLabel};
 use crate::{
+    dom::DOM,
     messages::Message,
     storage::{
         internal_storage::{InternalStorage, InternalStorageConfig},
@@ -11,12 +12,11 @@ use crate::{
         FlexibleQuorum, LogSync, NodeId, Quorum, SequenceNumber, READ_ERROR_MSG, WRITE_ERROR_MSG,
     },
     ClusterConfig, CompactionErr, OmniPaxosConfig, ProposeErr,
-    dom::DOM,
 };
+use rand::Rng;
 #[cfg(feature = "logging")]
 use slog::{debug, info, trace, warn, Logger};
 use std::{collections::HashMap, fmt::Debug, vec};
-use rand::Rng;
 
 pub mod follower;
 pub mod leader;
@@ -43,9 +43,11 @@ where
     cached_promise_message: Option<Promise<T>>,
     #[cfg(feature = "logging")]
     logger: Logger,
+    #[cfg(feature = "logging")]
+    state_label: StateLabel,
     // DOM
     dom: DOM<T>,
-    inflight_proposals: HashMap<(u64, u64), bool>
+    inflight_proposals: HashMap<(u64, u64), bool>,
 }
 
 impl<T, B> SequencePaxos<T, B>
@@ -85,6 +87,18 @@ where
         let internal_storage_config = InternalStorageConfig {
             batch_size: config.batch_size,
         };
+        #[cfg(feature = "logging")]
+        let (paxos_logger, paxos_state_label) = {
+            if let Some(logger) = config.custom_logger {
+                use std::sync::{Arc, Mutex};
+                (logger, Arc::new(Mutex::new("---/---".to_string())))
+            } else {
+                let s = config
+                    .logger_file_path
+                    .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
+                create_logger(s.as_str(), pid)
+            }
+        };
         let mut paxos = SequencePaxos {
             internal_storage: InternalStorage::with(
                 storage,
@@ -103,18 +117,10 @@ where
             current_seq_num: SequenceNumber::default(),
             cached_promise_message: None,
             #[cfg(feature = "logging")]
-            logger: {
-                if let Some(logger) = config.custom_logger {
-                    logger
-                } else {
-                    let s = config
-                        .logger_file_path
-                        .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
-                    create_logger(s.as_str())
-                }
-            },
-            // viv - got lazy again, 3 is the fast path quorum size, which is likely math.ceil(1.5*config.flexiblequorum)
-            dom: DOM::new(3),
+            logger: paxos_logger,
+            #[cfg(feature = "logging")]
+            state_label: paxos_state_label,
+            dom: DOM::new(num_nodes),
             inflight_proposals: HashMap::new(),
         };
         paxos
@@ -268,80 +274,137 @@ where
     }
 
     fn handle_fast_reply(&mut self, fr: FastReply<T>) {
-        let key = (self.pid, fr.request_id);
+        let key = (fr.coordinator_id, fr.request_id);
         let sender_id = fr.replica_id;
-        // Viv - I am not sure if this equality works to detect leader; but I think it should
-        let decided = self.dom.handle_fast_reply(fr, sender_id == self.get_current_leader());
-        if decided {
-            let replied = self.inflight_proposals.entry(key).or_insert(false);
-            if !*replied {
-                *replied = true;
-                
+        let decided = self
+            .dom
+            .handle_fast_reply(fr, sender_id == self.get_current_leader());
+        if let Some(decision) = decided {
+            let already_replied = self.inflight_proposals.get(&key).copied().unwrap_or(false);
+            if !already_replied {
+                // Super quorum of FastReply messages reached: the coordinator
+                // advances decided_idx locally here (fast-path 1-RTT client reply).
+                // The leader will subsequently broadcast Decide to all nodes.
+                self.inflight_proposals.remove(&key);
+                if decision.accepted_idx > self.internal_storage.get_decided_idx() {
+                    self.internal_storage
+                        .set_decided_idx(decision.accepted_idx)
+                        .expect(WRITE_ERROR_MSG);
+                }
+
                 #[cfg(feature = "logging")]
                 info!(
                     self.logger,
-                    "Fast Path Accepted Value {:?}", key, 
+                    "[INFO][FAST_PATH][DECIDE] coordinator={} request={} accepted_idx={} hash={}",
+                    decision.coordinator_id,
+                    decision.request_id,
+                    decision.accepted_idx,
+                    decision.hash,
                 );
-                // reply to client here -- maybe; in omnipaxos_kv, the server checks the decided log peridocially and responds based on that
             }
+        }
+    }
+
+    fn dispatch_fast_reply(&mut self, fr: FastReply<T>) {
+        if fr.coordinator_id == self.pid {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[RECV][FAST_REPLY][LOCAL] from={} request={} accepted_idx={:?} hash={}",
+                fr.replica_id,
+                fr.request_id,
+                fr.accepted_idx,
+                fr.hash,
+            );
+            self.handle_fast_reply(fr);
+        } else {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[SEND][FAST_REPLY] to={} from={} request={} accepted_idx={:?} hash={}",
+                fr.coordinator_id,
+                fr.replica_id,
+                fr.request_id,
+                fr.accepted_idx,
+                fr.hash,
+            );
+            self.outgoing.push(Message::SequencePaxos(PaxosMessage {
+                from: self.pid,
+                to: fr.coordinator_id,
+                msg: PaxosMsg::FastReply(fr),
+            }));
         }
     }
 
     /// Viv - I am lazy but we need to handle the case where the sync is received before the value is released to the log
     /// probably need to store the sync message in that case
     fn handle_fast_sync(&mut self, fs: FastSync) {
-        let (in_sync, _)  = self.dom.handle_fast_sync(&fs); 
+        let (in_sync, _) = self.dom.handle_fast_sync(&fs);
         if !in_sync {
             #[cfg(feature = "logging")]
-            info!(
-                self.logger,
-                "Out of sync for log index {:?}", fs.log_index 
-            );
+            info!(self.logger, "Out of sync for log index {:?}", fs.log_index);
         }
     }
 
-    /// We need a way to call this, basically KV will need another timer that calls this tick function
-    /// used to release messages
+    /// Drains all entries from the DOM early buffer whose deadline has passed.
+    /// Called on every OmniPaxos tick to advance the fast-path state machine.
     pub fn tick(&mut self) {
-        loop {
-            match self.dom.release_message() {
-                None => return,
-                Some(prop_msg) => {
-                    // append to log but I think this is not a decide - Pavlos/Sam pls confirm
-                    self.internal_storage.append_entries_and_get_accepted_idx(prop_msg.entries).expect(WRITE_ERROR_MSG);
-                    // hash is updated if message is released
-                    let hash = self.dom.last_log_hash;
-                    let fr: FastReply<T>= FastReply {
-                        n: prop_msg.n,
-                        request_id: prop_msg.id.1,
-                        replica_id: self.pid,
-                        result: None,
-                        hash: hash,
-                    };
-                    let to_send = Message::SequencePaxos(PaxosMessage {
-                        from: self.pid,
-                        to: prop_msg.id.0,
-                        msg: PaxosMsg::FastReply(fr),
-                    });
-                    self.outgoing.push(to_send);
-                    // send accept here - Sam please double check sequencing
-                    // also need to add the hash value
-                    let am: Accepted = Accepted{
-                        n: prop_msg.n,
-                        accepted_idx: self.internal_storage.get_accepted_idx(),
-                    };
-                    self.outgoing.push(Message::SequencePaxos(PaxosMessage {
-                        from: self.pid,
-                        to: self.get_current_leader(),
-                        msg: PaxosMsg::Accepted(am),
-                    }));
-                }
+        while let Some(prop_msg) = self.dom.release_message() {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[INFO][FAST_PATH][BUFFER] releasing request={} coordinator={} deadline={}",
+                prop_msg.id.1,
+                prop_msg.id.0,
+                prop_msg.deadline,
+            );
+
+            if self.state == (Role::Leader, Phase::Accept) {
+                self.handle_released_fast_entry_leader(prop_msg);
+            } else if self.state == (Role::Follower, Phase::Accept) {
+                // Only process fast-path entries when we are in a stable accept state.
+                // Entries released while in Prepare/Recover are discarded; recovery via
+                // AcceptSync will bring the log up to date.
+                let fast_reply = self.handle_released_fast_entry_follower(prop_msg);
+                self.dispatch_fast_reply(fast_reply);
+            } else {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[INFO][FAST_PATH][BUFFER] discarding (not in Accept phase) request={} coordinator={} deadline={}",
+                    prop_msg.id.1,
+                    prop_msg.id.0,
+                    prop_msg.deadline,
+                );
             }
+            // else: drop the entry — the node is in Prepare or Recover phase and will
+            // receive correct entries from the leader via AcceptSync.
         }
     }
 
     /// Handle an incoming message.
     pub(crate) fn handle(&mut self, m: PaxosMessage<T>) {
+        #[cfg(feature = "logging")]
+        {
+            let msg_type = match &m.msg {
+                PaxosMsg::Prepare(_) => "Prepare",
+                PaxosMsg::PrepareReq(_) => "PrepareReq",
+                PaxosMsg::Promise(_) => "Promise",
+                PaxosMsg::AcceptSync(_) => "AcceptSync",
+                PaxosMsg::AcceptDecide(_) => "AcceptDecide",
+                PaxosMsg::Accepted(_) => "Accepted",
+                PaxosMsg::Decide(_) => "Decide",
+                PaxosMsg::FastPropose(_) => "FastPropose",
+                PaxosMsg::FastAccepted(_) => "FastAccepted",
+                PaxosMsg::FastReply(_) => "FastReply",
+                PaxosMsg::Sync(_) => "FastSync",
+                _ => "other",
+            };
+            info!(
+                self.logger,
+                "[RECV] {} from={}", msg_type, m.from
+            );
+        }
         match m.msg {
             PaxosMsg::PrepareReq(prepreq) => self.handle_preparereq(prepreq, m.from),
             PaxosMsg::Prepare(prep) => self.handle_prepare(prep, m.from),
@@ -351,16 +414,26 @@ where
                 _ => {}
             },
             PaxosMsg::AcceptSync(acc_sync) => self.handle_acceptsync(acc_sync, m.from),
-            PaxosMsg::AcceptDecide(acc) => self.handle_acceptdecide(acc),
+            PaxosMsg::AcceptDecide(acc) => self.handle_acceptdecide(acc, false),
             PaxosMsg::NotAccepted(not_acc) => self.handle_notaccepted(not_acc, m.from),
             PaxosMsg::Accepted(accepted) => self.handle_accepted(accepted, m.from),
+            PaxosMsg::FastAccepted(fast_accepted) => {
+                self.handle_fast_accepted(fast_accepted, m.from)
+            }
             PaxosMsg::Decide(d) => self.handle_decide(d),
             PaxosMsg::ProposalForward(proposals) => self.handle_forwarded_proposal(proposals),
             PaxosMsg::Compaction(c) => self.handle_compaction(c),
             PaxosMsg::AcceptStopSign(acc_ss) => self.handle_accept_stopsign(acc_ss),
             PaxosMsg::ForwardStopSign(f_ss) => self.handle_forwarded_stopsign(f_ss),
             // DOM Messages
-            PaxosMsg::FastPropose(payload )  => self.dom.handle_fast_propose(payload), 
+            // The leader applies deadline-reordering for late entries; followers do not.
+            PaxosMsg::FastPropose(payload) => {
+                if self.state.0 == Role::Leader {
+                    self.dom.handle_fast_propose_leader(payload);
+                } else {
+                    self.dom.handle_fast_propose(payload);
+                }
+            }
             PaxosMsg::FastReply(fast_accept) => self.handle_fast_reply(fast_accept),
             PaxosMsg::Sync(fast_sync) => self.handle_fast_sync(fast_sync),
         }
@@ -421,10 +494,18 @@ where
     /// Handles re-establishing a connection to a previously disconnected peer.
     /// This should only be called if the underlying network implementation indicates that a connection has been re-established.
     pub(crate) fn reconnected(&mut self, pid: NodeId) {
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[RECOVER] gap detected from={} → entering Recover phase, sending PrepareReq",
+            pid
+        );
         if pid == self.pid {
             return;
         } else if pid == self.get_current_leader() {
             self.state = (Role::Follower, Phase::Recover);
+            #[cfg(feature = "logging")]
+            self.update_state_label();
         }
         let prepreq = PrepareReq {
             n: self.get_promise(),
@@ -437,26 +518,51 @@ where
     }
 
     fn propose_entry(&mut self, entry: T) {
-        // in nezha, we just always broadcast an AcceptDecide to everyone
-        // generating a random request id because I don't know where to get it
+        if self.state.1 != Phase::Accept || self.get_current_leader() == 0 {
+            #[cfg(feature = "logging")]
+            info!(
+                self.logger,
+                "[INFO][FAST_PATH] falling back to slow path; state={:?}", self.state,
+            );
+
+            match self.state {
+                (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
+                (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
+                _ => self.forward_proposals(vec![entry]),
+            }
+            return;
+        }
+
         let mut rng = rand::thread_rng();
-        let req_id: u64 = rng.gen(); 
-        // data for the accept decide - this is how leader does it, but note that it updates internal storage so I don't think we should do this
-        // let accepted_metadata = self
-        //     .internal_storage
-        //     .append_entry_with_batching(entry)
-        //     .expect(WRITE_ERROR_MSG);
-        // let Some(meta) = accepted_metadata else {
-        //     return;
-        // };
+        let req_id: u64 = rng.gen();
+        let request_key = (self.pid, req_id);
+        self.inflight_proposals.insert(request_key, false);
         let acc = AcceptDecide {
-                n: self.leader_state.n_leader,
-                seq_num: self.leader_state.next_seq_num(self.pid),
-                decided_idx: self.internal_storage.get_decided_idx(), // I guess we don't used decidedIndex in Nezha
-                entries: vec![entry],
-                id: (self.pid, req_id),
-                deadline: self.dom.get_deadline(),
-            };
+            n: self.get_promise(),
+            seq_num: SequenceNumber::default(),
+            decided_idx: self.internal_storage.get_decided_idx(), // I guess we don't used decidedIndex in Nezha
+            entries: vec![entry],
+            id: request_key,
+            deadline: self.dom.get_deadline(),
+            dom_hash: 0, // fast-path: receivers compute the hash themselves via reply_fast_accepted
+        };
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[SEND][FAST_PROPOSE] coordinator={} request={} deadline={} leader={}",
+            self.pid,
+            req_id,
+            acc.deadline,
+            self.get_current_leader(),
+        );
+        #[cfg(feature = "logging")]
+        info!(
+            self.logger,
+            "[APPEND] fast_propose coordinator={} request={} deadline={}",
+            self.pid,
+            acc.id.1,
+            acc.deadline,
+        );
         // send to all peers
         for peer_ref in &self.peers {
             let pid = *peer_ref;
@@ -464,21 +570,14 @@ where
                 from: self.pid,
                 to: pid,
                 msg: PaxosMsg::FastPropose(acc.clone()),
-            })); 
-        } 
+            }));
+        }
         // and send to self
         self.outgoing.push(Message::SequencePaxos(PaxosMessage {
             from: self.pid,
             to: self.pid,
             msg: PaxosMsg::FastPropose(acc),
         }));
-
-        // this is the original code
-        // match self.state {
-        //     (Role::Leader, Phase::Prepare) => self.buffered_proposals.push(entry),
-        //     (Role::Leader, Phase::Accept) => self.accept_entry_leader(entry),
-        //     _ => self.forward_proposals(vec![entry]),
-        // }
     }
 
     pub(crate) fn get_leader_state(&self) -> &LeaderState<T> {
@@ -550,6 +649,31 @@ where
             suffix,
             sync_idx,
             stopsign: self.internal_storage.get_stopsign(),
+        }
+    }
+
+    /// Returns the current cumulative DOM log hash.  Useful in tests to verify
+    /// that two nodes have applied the same fast-path metadata sequence.
+    pub(crate) fn get_dom_hash(&self) -> u64 {
+        self.dom.last_log_hash
+    }
+
+    /// Updates the shared `state_label` so the logger prefix reflects the
+    /// current `(Role, Phase)` on the next log line.
+    #[cfg(feature = "logging")]
+    pub(crate) fn update_state_label(&self) {
+        let label = match &self.state {
+            (Role::Leader, Phase::Prepare) => "Ldr/Pre",
+            (Role::Leader, Phase::Accept) => "Ldr/Acc",
+            (Role::Leader, Phase::Recover) => "Ldr/Rec",
+            (Role::Leader, Phase::None) => "Ldr/---",
+            (Role::Follower, Phase::Prepare) => "Fol/Pre",
+            (Role::Follower, Phase::Accept) => "Fol/Acc",
+            (Role::Follower, Phase::Recover) => "Fol/Rec",
+            (Role::Follower, Phase::None) => "Fol/---",
+        };
+        if let Ok(mut g) = self.state_label.lock() {
+            *g = label.to_string();
         }
     }
 }

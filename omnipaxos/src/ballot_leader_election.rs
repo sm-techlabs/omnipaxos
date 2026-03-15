@@ -135,7 +135,7 @@ impl BallotLeaderElection {
                     let s = config
                         .logger_file_path
                         .unwrap_or_else(|| format!("logs/paxos_{}.log", pid));
-                    create_logger(s.as_str())
+                    create_logger(s.as_str(), pid).0
                 }
             },
         };
@@ -223,6 +223,13 @@ impl BallotLeaderElection {
         let max_reply_ballot = self.heartbeat_replies.iter().map(|r| r.ballot).max();
         if let Some(max) = max_reply_ballot {
             if max > self.leader {
+                #[cfg(feature = "logging")]
+                info!(
+                    self.logger,
+                    "[BLE] leader changed from={:?} to={:?}",
+                    self.leader,
+                    max,
+                );
                 self.leader = max;
             }
         }
