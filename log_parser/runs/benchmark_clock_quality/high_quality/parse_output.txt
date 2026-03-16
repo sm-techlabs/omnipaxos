@@ -1,0 +1,5 @@
+Number matched events: 16000
+16000 Proposals with mean latency of 364.861 over 16000 completed events
+16000 Fast Path Completions :: 0 Slow Path Completions
+Mean Throughput: 5462.615 Requests/s :: Runtime: 2.929 seconds
+Hash Errors: 0

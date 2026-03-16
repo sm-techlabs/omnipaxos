@@ -34,7 +34,7 @@ struct FastAcceptedQuorum {
 pub enum FastAcceptedOutcome {
     /// This acknowledgement matched the reference hash but the fast quorum
     /// threshold has not yet been reached.
-    Pending,
+    Pending(bool),
     /// The fast quorum threshold has been reached; the leader may now call
     /// `fast_decide`.
     QuorumReached,
@@ -190,12 +190,14 @@ where
 
             if qd.fast_response.len() + qd.slow_response.len() >= self.fast_quorum_size {
                 if let Some(accepted_idx) = leader_reply.accepted_idx {
-                    return Some(FastPathDecision {
-                        coordinator_id: leader_reply.coordinator_id,
-                        request_id: leader_reply.request_id,
-                        accepted_idx,
-                        hash: leader_reply.hash,
-                    });
+                    if qd.fast_response.iter().any(|replica_id| *replica_id == key.0) {
+                        return Some(FastPathDecision {
+                            coordinator_id: leader_reply.coordinator_id,
+                            request_id: leader_reply.request_id,
+                            accepted_idx,
+                            hash: leader_reply.hash,
+                        });
+                    }
                 }
             }
         }
@@ -236,6 +238,7 @@ where
         &mut self,
         accepted: FastAccepted,
         from: NodeId,
+        leader_pid: NodeId,
     ) -> FastAcceptedOutcome {
         let qd = self
             .fast_accepted_tracker
@@ -250,10 +253,15 @@ where
         }
 
         qd.replicas.insert(from);
+        let has_leader_fast_accepted = qd.replicas.contains(&leader_pid);
         if qd.replicas.len() >= self.fast_quorum_size {
-            FastAcceptedOutcome::QuorumReached
+            if has_leader_fast_accepted {
+                FastAcceptedOutcome::QuorumReached
+            } else {
+                FastAcceptedOutcome::Pending(has_leader_fast_accepted)
+            }
         } else {
-            FastAcceptedOutcome::Pending
+            FastAcceptedOutcome::Pending(has_leader_fast_accepted)
         }
     }
 
@@ -348,7 +356,7 @@ where
 
     /// Returns the expected max one way delay to be used as a deadline
     pub fn get_deadline(&mut self) -> i64 {
-        self.sim_clock.get_time() + 2000
+        self.sim_clock.get_time() + 10
     }
 
     /// lets us see the next deadline if there is a message in the early queue
@@ -362,34 +370,6 @@ where
         accepted_idx
             .checked_sub(1)
             .and_then(|idx| self.log_hashes.get(idx).copied())
-    }
-
-    /// Corrects the hash chain at `decided_idx` to `correct_hash`, propagating
-    /// the XOR delta forward through every subsequent recorded position.
-    ///
-    /// This is needed when a follower accepted entries beyond `decided_idx`
-    /// using a locally-computed hash chain that diverged from the leader's at
-    /// exactly `decided_idx` (e.g. deadline reordering).  Patching in-place
-    /// preserves the validity of all subsequent entries.
-    ///
-    /// If `log_hashes` has no entry at `decided_idx` (the follower's chain
-    /// doesn't reach that far), `last_log_hash` is set directly.
-    pub fn patch_hash_at(&mut self, decided_idx: usize, correct_hash: u64) {
-        match self.get_hash_at(decided_idx) {
-            Some(old_hash) => {
-                let delta = old_hash ^ correct_hash;
-                let start = decided_idx - 1; // checked_sub safe: get_hash_at succeeded
-                for h in &mut self.log_hashes[start..] {
-                    *h ^= delta;
-                }
-                self.last_log_hash ^= delta;
-            }
-            None => {
-                // Chain doesn't reach decided_idx; follower has no recorded
-                // hashes beyond this point, so just set last_log_hash.
-                self.last_log_hash = correct_hash;
-            }
-        }
     }
 
     fn fast_quorum_size(cluster_size: usize) -> usize {

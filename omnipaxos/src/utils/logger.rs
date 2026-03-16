@@ -60,8 +60,41 @@ impl<W: Write + Send + 'static> Drain for PrefixedDrain<W> {
         // Level (5 chars, uppercase)
         write!(buf, " {:5} ", record.level().as_short_str().to_uppercase()).ok();
 
-        // Message
-        write!(buf, "{}", record.msg()).ok();
+        // Messages that start with [TAG][TAG]... get their content moved to the
+        // next line with a tab so the bracket tags and fields are easy to scan.
+        // We scan only the leading bracket section to find the split point,
+        // avoiding false matches on brackets inside field values (e.g. Ballot).
+        let msg = record.msg().to_string();
+        let split_pos = if msg.starts_with('[') {
+            let mut i = 0;
+            let mut found = None;
+            let bytes = msg.as_bytes();
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'[' => match msg[i..].find(']') {
+                        Some(close) => i += close + 1,
+                        None => break,
+                    },
+                    b' ' => { found = Some(i); break; }
+                    _ => break,
+                }
+            }
+            found
+        } else {
+            None
+        };
+        if let Some(_pos) = split_pos {
+            write!(buf, "{}", msg).ok();
+            // let tag = &msg[..pos];
+            // let content = msg[pos + 1..].trim_start();
+            // if content.is_empty() {
+            //     write!(buf, "{}", msg).ok();
+            // } else {
+            //     write!(buf, "{}\n\t\t{}", tag, content).ok();
+            // }
+        } else {
+            write!(buf, "{}", msg).ok();
+        }
 
         // Key-value pairs from call-site and logger context
         let mut kv = KvBuf(Vec::new());
@@ -113,7 +146,7 @@ pub fn create_logger(file_path: &str, pid: NodeId) -> (slog::Logger, StateLabel)
     };
 
     let both = slog::Duplicate::new(term_drain, file_drain).fuse();
-    let both = slog_async::Async::new(both).build().fuse();
+    let both = slog_async::Async::new(both).chan_size(65_536).build().fuse();
 
     let logger = slog::Logger::root(both, slog::o!("node" => pid.to_string()));
     (logger, state)
