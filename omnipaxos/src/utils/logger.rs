@@ -146,7 +146,7 @@ pub fn create_logger(file_path: &str, pid: NodeId) -> (slog::Logger, StateLabel)
     };
 
     let both = slog::Duplicate::new(term_drain, file_drain).fuse();
-    let both = slog_async::Async::new(both).build().fuse();
+    let both = slog_async::Async::new(both).chan_size(65_536).build().fuse();
 
     let logger = slog::Logger::root(both, slog::o!("node" => pid.to_string()));
     (logger, state)

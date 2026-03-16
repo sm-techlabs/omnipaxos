@@ -59,7 +59,8 @@ impl ClockState {
         self.uncertainty = uncertainty;
         self.drift_rate = drift_rate;
         self.frequency = frequency;
-        self.base_offset = base_offset;
+        let mut rng = rand::thread_rng();
+        self.base_offset = rng.gen_range(0..=self.base_offset);
     }
 
     /// Returns the configured clock uncertainty in microseconds.

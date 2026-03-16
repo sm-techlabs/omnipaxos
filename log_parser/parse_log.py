@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
-import matplotlib.pyplot as plt
-import networkx as nx
+# import matplotlib.pyplot as plt
+# import networkx as nx
 from enum import Enum
 
 
@@ -228,25 +228,17 @@ def get_proposals_and_mean_latency(revents: list[list[dict]]) -> tuple[int, int]
     mean_latency = sum(latencies)/len(latencies)
     fast_comps = sum([1 for x in paths if x == PATH.FAST])
     slow_comps = sum([1 for x in paths if x == PATH.SLOW])
-    print(f"{prop_count} Proposals with mean latency of {mean_latency} over {len(latencies)} completed events")
+    print(f"{prop_count} Proposals with mean latency of {mean_latency:.3f} over {len(latencies)} completed events")
     print(f"{fast_comps} Fast Path Completions :: {slow_comps} Slow Path Completions")
     end_to_end = last - first
-    print(f"Mean Througput: {len(latencies)/end_to_end} Requests/s :: Runtime: {end_to_end} seconds")
+    print(f"Mean Throughput: {len(latencies)/end_to_end:.3f} Requests/s :: Runtime: {end_to_end:.3f} seconds")
     print(f"Hash Errors: {hash_errors}")
     return prop_count, mean_latency
 
 if __name__ == "__main__":
-    # tm = parse_file("example_log.txt")
-    # draw_digraph_timeline(tm)
-    print("hi")
-    # esc = "\x1b"
-    # line = f"s1  | {esc}[31m[P1 Fol/Acc]{esc}[0m Mar 15 12:12:38.653 INFO  [INFO][FAST_PATH][BUFFER] releasing request=12702945265148441474 coordinator=2 deadline=1773576757663324"
-    # event = parse_line(line)
-    # print(event)
-    # filename = "log_parser/log_basic_test.log"
-    filename = "log_parser/logs_131.log"
+    import sys
+    filename = sys.argv[1] if len(sys.argv) > 1 else "log_parser/logs_131.log"
     events = get_all_events(filename)
-    # find_match_event(events)
     event_data = sort_events(events)
     print(f"Number matched events: {len(event_data.keys())}")
     get_proposals_and_mean_latency(event_data.values())

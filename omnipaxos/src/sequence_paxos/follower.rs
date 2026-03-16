@@ -312,14 +312,14 @@ where
                 }
             }
 
-            #[cfg(feature = "logging")]
-            info!(
-                self.logger,
-                "[RECV][DECIDE] from={} decided_idx={} hash={} → committed",
-                dec.n.pid,
-                dec.decided_idx,
-                dec.hash,
-            );
+            // #[cfg(feature = "logging")]
+            // info!(
+            //     self.logger,
+            //     "[RECV][DECIDE] from={} decided_idx={} hash={} → committed",
+            //     dec.n.pid,
+            //     dec.decided_idx,
+            //     dec.hash,
+            // );
             let new_accepted_idx = self.update_decided_idx_and_get_accepted_idx(dec.decided_idx);
             if let Some(idx) = new_accepted_idx {
                 self.reply_accepted(dec.n, idx);

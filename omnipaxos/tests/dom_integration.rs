@@ -2067,3 +2067,100 @@ fn many_entries_multiple_coordinators() {
 
     test_end("many_entries_multiple_coordinators");
 }
+
+/// Simulated traffic — 7 nodes, 4 coordinators, 120 requests in bursts
+///
+/// This test simulates realistic client traffic on a fully-connected 7-node
+/// cluster.  Four non-leader nodes each act as coordinators and collectively
+/// submit 120 requests (30 per coordinator).  Requests are sent in six bursts
+/// of 20 proposals each (5 per coordinator per burst) with a short pause
+/// between bursts, so consecutive proposals within a burst share very similar
+/// deadlines — maximising the chance of concurrent fast-path racing.
+///
+/// All 7 nodes are connected throughout, so the fast quorum (N=7 → 6) is
+/// always met and every entry should be decided via the DOM fast path.
+///
+/// The test waits for all 7 nodes to reach decided_idx >= TOTAL and relies on
+/// the log output (parsed by log_parser/parse_log.py) for performance analysis.
+#[test]
+#[serial]
+fn simulated_traffic() {
+    test_begin("simulated_traffic");
+    let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
+    let sys = TestGuard::new(TestSystem::with(cfg), "simulated_traffic");
+    sys.start_all_nodes();
+
+    let no_timeout = Duration::MAX;
+
+    let leader = sys.get_elected_leader(1, no_timeout);
+
+    // Wait for every node to enter Phase::Accept before proposing.
+    // Without this, proposals arrive while nodes are still in Prepare and fall
+    // back to the slow path, skewing the fast-path statistics we want to log.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(no_timeout, || {
+            sys.nodes.get(&pid).unwrap().on_definition(|x| {
+                matches!(x.paxos.get_current_leader(), Some((_, true)))
+            })
+        });
+    }
+
+    // Four distinct non-leader coordinators.
+    let coordinators: Vec<NodeId> = (1..=cfg.num_nodes as NodeId)
+        .filter(|&pid| pid != leader)
+        .take(4)
+        .collect();
+    assert_eq!(coordinators.len(), 4, "need at least 4 non-leader nodes (N=7 guarantees this)");
+
+    const NUM_COORDS: u64 = 4;
+    const REQUESTS_PER_COORD: u64 = 4000;
+    const BURSTS: u64 = 1000;
+    const PER_COORD_PER_BURST: u64 = REQUESTS_PER_COORD / BURSTS;
+    // Derive TOTAL from what is actually sent so integer division in
+    // PER_COORD_PER_BURST never causes a mismatch when REQUESTS_PER_COORD
+    // is not evenly divisible by BURSTS.
+    const TOTAL: usize = (NUM_COORDS * BURSTS * PER_COORD_PER_BURST) as usize;
+
+    for burst in 0..BURSTS {
+        // Within each burst all 4 coordinators fire PER_COORD_PER_BURST
+        // proposals back-to-back, making their deadlines nearly identical.
+        for (c_idx, &coord) in coordinators.iter().enumerate() {
+            let base = c_idx as u64 * REQUESTS_PER_COORD + burst * PER_COORD_PER_BURST;
+            for i in 0..PER_COORD_PER_BURST {
+                let id = base + i + 1; // unique across all coordinators and bursts
+                sys.nodes.get(&coord).unwrap().on_definition(|x| {
+                    x.paxos.append(Value::with_id(id)).expect("append should succeed");
+                });
+            }
+        }
+        // Inter-burst gap — ensures deadlines are well-separated across bursts.
+        sleep(Duration::from_millis(1));
+    }
+
+    // Wait for all nodes to decide all entries.
+    for pid in 1..=cfg.num_nodes as NodeId {
+        wait_until(no_timeout, || {
+            sys.nodes
+                .get(&pid)
+                .unwrap()
+                .on_definition(|x| x.paxos.get_decided_idx() >= TOTAL)
+        });
+    }
+
+    // All 7 nodes must converge on the same final DOM hash.
+    let leader_hash = get_dom_hash(&sys, leader);
+    for pid in 1..=cfg.num_nodes as NodeId {
+        let h = get_dom_hash(&sys, pid);
+        assert_eq!(
+            h, leader_hash,
+            "node {pid} dom_hash={h:#018x} != leader dom_hash={leader_hash:#018x}"
+        );
+    }
+
+    // Grace period: allow the slog-async drain to flush all buffered log
+    // messages before the Kompact system is dropped. Without this, the tail
+    // of the log is truncated and the parser sees incomplete event chains.
+    sleep(Duration::from_secs(2));
+
+    test_end("simulated_traffic");
+}
