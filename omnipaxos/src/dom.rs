@@ -348,7 +348,7 @@ where
 
     /// Returns the expected max one way delay to be used as a deadline
     pub fn get_deadline(&mut self) -> i64 {
-        self.sim_clock.get_time() + 50
+        self.sim_clock.get_time() + 2000
     }
 
     /// lets us see the next deadline if there is a message in the early queue
