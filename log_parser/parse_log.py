@@ -122,6 +122,13 @@ def get_all_events(filename):
             events.append(parse_line(line))
     return events
 
+def _parse_idx(raw: str) -> int:
+    """Extract the first run of digits from a raw index string like 'Some(7538;'."""
+    m = re.search(r'\d+', raw)
+    if m is None:
+        raise ValueError(f"No integer found in index value: {raw!r}")
+    return int(m.group())
+
 def sort_events(events: list[dict]):
     rid_to_idx = {}
     events_at_id = {}
@@ -132,7 +139,7 @@ def sort_events(events: list[dict]):
         if "rid" in ev.keys() and "accepted_idx" in ev['kv_pairs'].keys() and "Ldr" in ev["pidE"] and "[SEND]" in ev["info"]:
             rid = ev["rid"]
             idx = ev['kv_pairs']['accepted_idx']
-            idx = int(idx.replace("Some(", "").replace(")", ""))
+            idx = _parse_idx(idx)
             if rid not in rid_to_idx:
                 rid_to_idx[rid] = idx
             else:
@@ -149,9 +156,9 @@ def sort_events(events: list[dict]):
     for ev in unknown_events:
         idx = None
         if "accepted_idx" in ev["kv_pairs"].keys():
-            idx = int(ev["kv_pairs"]["accepted_idx"].replace("Some(", "").replace(")", ""))
+            idx = _parse_idx(ev["kv_pairs"]["accepted_idx"])
         elif "decided_idx" in ev["kv_pairs"].keys():
-            idx = int(ev["kv_pairs"]["decided_idx"].replace("Some(", "").replace(")", "").replace(":", "").replace(",", ""))
+            idx = _parse_idx(ev["kv_pairs"]["decided_idx"])
         # elif "pidE" in ev.keys():
         #     print(f"Could not link event to request id: {ev}")
         if idx != None:

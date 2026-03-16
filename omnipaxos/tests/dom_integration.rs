@@ -2086,7 +2086,7 @@ fn many_entries_multiple_coordinators() {
 #[serial]
 fn simulated_traffic() {
     test_begin("simulated_traffic");
-    let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
+    let cfg = dom_default_testcfg(None, None); // 7 nodes, fast_quorum=6
     let sys = TestGuard::new(TestSystem::with(cfg), "simulated_traffic");
     sys.start_all_nodes();
 

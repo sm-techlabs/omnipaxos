@@ -8,9 +8,10 @@
 #   CLOCK_OFFSET         — constant base offset (kept at 0)
 #
 # Configurations:
-#   high   ±10 μs   uncertainty, 1 ms  sync interval
-#   medium ±100 μs  uncertainty, 10 ms sync interval
-#   low    ±1000 μs uncertainty, 100ms sync interval
+#   high     ±10 μs    uncertainty, 1 ms   sync interval
+#   medium   ±100 μs   uncertainty, 10 ms  sync interval
+#   low      ±1000 μs  uncertainty, 100ms  sync interval
+#   terrible ±10000 μs uncertainty, 1000ms sync interval
 
 set -uo pipefail
 
@@ -22,11 +23,11 @@ mkdir -p "$BENCH_DIR"
 
 # ── configuration table ────────────────────────────────────────────────────────
 # Each row: name  uncertainty(μs)  sync_frequency(μs)  drift  offset
-declare -a NAMES=("high_quality" "medium_quality" "low_quality")
-declare -a UNCERTAINTY=(10       100              1000)
-declare -a SYNC_FREQ=(1001       10001            100001)
-declare -a DRIFT=(0              0                0)
-declare -a OFFSET=(1             10                100)
+declare -a NAMES=("high_quality" "medium_quality" "low_quality" "terrible_quality")
+declare -a UNCERTAINTY=(10       100              1000          10000)
+declare -a SYNC_FREQ=(1001       10001            100001        1000001)
+declare -a DRIFT=(0              0                0             0)
+declare -a OFFSET=(1             10               100           1000)
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 SEP="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
