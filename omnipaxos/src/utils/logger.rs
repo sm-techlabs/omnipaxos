@@ -83,14 +83,15 @@ impl<W: Write + Send + 'static> Drain for PrefixedDrain<W> {
         } else {
             None
         };
-        if let Some(pos) = split_pos {
-            let tag = &msg[..pos];
-            let content = msg[pos + 1..].trim_start();
-            if content.is_empty() {
-                write!(buf, "{}", msg).ok();
-            } else {
-                write!(buf, "{}\n\t\t{}", tag, content).ok();
-            }
+        if let Some(_pos) = split_pos {
+            write!(buf, "{}", msg).ok();
+            // let tag = &msg[..pos];
+            // let content = msg[pos + 1..].trim_start();
+            // if content.is_empty() {
+            //     write!(buf, "{}", msg).ok();
+            // } else {
+            //     write!(buf, "{}\n\t\t{}", tag, content).ok();
+            // }
         } else {
             write!(buf, "{}", msg).ok();
         }
