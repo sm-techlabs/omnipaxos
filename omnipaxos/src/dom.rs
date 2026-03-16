@@ -190,12 +190,14 @@ where
 
             if qd.fast_response.len() + qd.slow_response.len() >= self.fast_quorum_size {
                 if let Some(accepted_idx) = leader_reply.accepted_idx {
-                    return Some(FastPathDecision {
-                        coordinator_id: leader_reply.coordinator_id,
-                        request_id: leader_reply.request_id,
-                        accepted_idx,
-                        hash: leader_reply.hash,
-                    });
+                    if qd.fast_response.iter().any(|replica_id| *replica_id == key.0) {
+                        return Some(FastPathDecision {
+                            coordinator_id: leader_reply.coordinator_id,
+                            request_id: leader_reply.request_id,
+                            accepted_idx,
+                            hash: leader_reply.hash,
+                        });
+                    }
                 }
             }
         }
