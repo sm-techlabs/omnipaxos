@@ -212,12 +212,13 @@ fn print_final_logs(sys: &TestSystem, test_name: &str) {
     eprintln!("\x1b[35m└─ End final logs\x1b[0m");
 }
 
-fn dom_default_testcfg(num_nodes: Option<usize>) -> TestConfig {
+fn dom_default_testcfg(num_nodes: Option<usize>, wait_timeout: Option<Duration>) -> TestConfig {
     let num_nodes = num_nodes.unwrap_or(7);
+    let wait_timeout = wait_timeout.unwrap_or(Duration::from_millis(10_000));
     TestConfig {
         num_nodes,
         num_threads: num_nodes,
-        wait_timeout: Duration::from_millis(10_000),
+        wait_timeout,
         ..TestConfig::default()
     }
 }
@@ -242,7 +243,7 @@ fn dom_default_testcfg(num_nodes: Option<usize>) -> TestConfig {
 #[serial]
 fn fast_path_coordinator_decides_before_cluster_wide_decide() {
     test_begin("fast_path_coordinator_decides_before_cluster_wide_decide");
-    let cfg = dom_default_testcfg(None);
+    let cfg = dom_default_testcfg(None, None);
     let sys = TestGuard::new(TestSystem::with(cfg), "fast_path_coordinator_decides_before_cluster_wide_decide");
     sys.start_all_nodes();
 
@@ -332,7 +333,7 @@ fn fast_path_coordinator_decides_before_cluster_wide_decide() {
 #[serial]
 fn partial_fast_quorum_falls_back_to_slow_path() {
     test_begin("partial_fast_quorum_falls_back_to_slow_path");
-    let cfg = dom_default_testcfg(Some(3)); // N=3 so fast_quorum=3; blocking one follower drops below quorum
+    let cfg = dom_default_testcfg(Some(3), None); // N=3 so fast_quorum=3; blocking one follower drops below quorum
     let sys = TestGuard::new(TestSystem::with(cfg), "partial_fast_quorum_falls_back_to_slow_path");
     sys.start_all_nodes();
 
@@ -411,7 +412,7 @@ fn partial_fast_quorum_falls_back_to_slow_path() {
 #[serial]
 fn coordinator_crash_still_decides() {
     test_begin("coordinator_crash_still_decides");
-    let cfg = dom_default_testcfg(Some(3));
+    let cfg = dom_default_testcfg(Some(3), None);
     let mut sys = TestGuard::new(TestSystem::with(cfg), "coordinator_crash_still_decides");
     sys.start_all_nodes();
 
@@ -464,7 +465,7 @@ fn coordinator_crash_still_decides() {
 #[serial]
 fn divergent_logs_reconcile_via_slow_path() {
     test_begin("divergent_logs_reconcile_via_slow_path");
-    let cfg = dom_default_testcfg(None);
+    let cfg = dom_default_testcfg(None, None);
     let sys = TestGuard::new(TestSystem::with(cfg), "divergent_logs_reconcile_via_slow_path");
     sys.start_all_nodes();
 
@@ -560,7 +561,7 @@ fn divergent_logs_reconcile_via_slow_path() {
 #[serial]
 fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
     test_begin("fast_path_same_deadline_tiebreaks_by_coordinator_pid");
-    let cfg = dom_default_testcfg(None);
+    let cfg = dom_default_testcfg(None, None);
     let sys = TestGuard::new(TestSystem::with(cfg), "fast_path_same_deadline_tiebreaks_by_coordinator_pid");
     sys.start_all_nodes();
 
@@ -620,7 +621,7 @@ fn fast_path_same_deadline_tiebreaks_by_coordinator_pid() {
 #[serial]
 fn seven_nodes_three_coordinators_deadline_ordering() {
     test_begin("seven_nodes_three_coordinators_deadline_ordering");
-    let cfg = dom_default_testcfg(None);
+    let cfg = dom_default_testcfg(None, None);
     let sys = TestGuard::new(TestSystem::with(cfg), "seven_nodes_three_coordinators_deadline_ordering");
     sys.start_all_nodes();
 
@@ -702,7 +703,7 @@ fn seven_nodes_three_coordinators_deadline_ordering() {
 #[serial]
 fn seven_nodes_multiple_coordinators_straggler_recovers() {
     test_begin("seven_nodes_multiple_coordinators_straggler_recovers");
-    let cfg = dom_default_testcfg(None);
+    let cfg = dom_default_testcfg(None, None);
     let sys = TestGuard::new(TestSystem::with(cfg), "seven_nodes_multiple_coordinators_straggler_recovers");
     sys.start_all_nodes();
 
@@ -808,7 +809,7 @@ fn seven_nodes_multiple_coordinators_straggler_recovers() {
 #[serial]
 fn happy_path_fast_path() {
     test_begin("happy_path_fast_path");
-    let cfg = dom_default_testcfg(Some(3)); // 3 nodes, all connected
+    let cfg = dom_default_testcfg(Some(3), None); // 3 nodes, all connected
     let sys = TestGuard::new(TestSystem::with(cfg), "happy_path_fast_path");
     sys.start_all_nodes();
 
@@ -867,7 +868,7 @@ fn happy_path_fast_path() {
 #[serial]
 fn happy_path_slow_path() {
     test_begin("happy_path_slow_path");
-    let cfg = dom_default_testcfg(Some(3)); // 3 nodes
+    let cfg = dom_default_testcfg(Some(3), None); // 3 nodes
     let sys = TestGuard::new(TestSystem::with(cfg), "happy_path_slow_path");
     sys.start_all_nodes();
 
@@ -920,7 +921,7 @@ fn happy_path_slow_path() {
 #[serial]
 fn seven_nodes_isolated_from_one_coordinator_converges() {
     test_begin("seven_nodes_isolated_from_one_coordinator_converges");
-    let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
+    let cfg = dom_default_testcfg(None, None); // 7 nodes, fast_quorum=6
     let sys = TestGuard::new(TestSystem::with(cfg), "seven_nodes_isolated_from_one_coordinator_converges");
     sys.start_all_nodes();
 
@@ -1029,7 +1030,7 @@ fn seven_nodes_isolated_from_one_coordinator_converges() {
 #[serial]
 fn termination_when_below_fast_quorum() {
     test_begin("termination_when_below_fast_quorum");
-    let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
+    let cfg = dom_default_testcfg(None, None); // 7 nodes, fast_quorum=6
     let sys = TestGuard::new(TestSystem::with(cfg), "termination_when_below_fast_quorum");
     sys.start_all_nodes();
 
@@ -1090,7 +1091,7 @@ fn termination_when_below_fast_quorum() {
 #[serial]
 fn dom_hash_diverges_after_slow_path_decision() {
     test_begin("dom_hash_diverges_after_slow_path_decision");
-    let cfg = dom_default_testcfg(Some(3)); // N=3, fast_quorum=3 (ALL nodes)
+    let cfg = dom_default_testcfg(Some(3), None); // N=3, fast_quorum=3 (ALL nodes)
     let sys = TestGuard::new(TestSystem::with(cfg), "dom_hash_diverges_after_slow_path_decision");
     sys.start_all_nodes();
 
@@ -1176,7 +1177,7 @@ fn dom_hash_diverges_after_slow_path_decision() {
 #[serial]
 fn leader_reorders_stale_deadline_decides_via_slow_path() {
     test_begin("leader_reorders_stale_deadline_decides_via_slow_path");
-    let cfg = dom_default_testcfg(Some(3));
+    let cfg = dom_default_testcfg(Some(3), None);
     let sys = TestGuard::new(TestSystem::with(cfg), "leader_reorders_stale_deadline_decides_via_slow_path");
     sys.start_all_nodes();
 
@@ -1293,7 +1294,7 @@ fn leader_reorders_stale_deadline_decides_via_slow_path() {
 #[serial]
 fn hash_mismatch_on_fast_accepted_triggers_recovery() {
     test_begin("hash_mismatch_on_fast_accepted_triggers_recovery");
-    let cfg = dom_default_testcfg(Some(3));
+    let cfg = dom_default_testcfg(Some(3), None);
     let sys = TestGuard::new(TestSystem::with(cfg), "hash_mismatch_on_fast_accepted_triggers_recovery");
     sys.start_all_nodes();
 
@@ -1400,7 +1401,7 @@ fn hash_mismatch_on_fast_accepted_triggers_recovery() {
 #[serial]
 fn leader_crash_pending_fast_path_entries_decided() {
     test_begin("leader_crash_pending_fast_path_entries_decided");
-    let cfg = dom_default_testcfg(None); // N=7
+    let cfg = dom_default_testcfg(None, None); // N=7
     let mut sys = TestGuard::new(
         TestSystem::with(cfg),
         "leader_crash_pending_fast_path_entries_decided",
@@ -1486,7 +1487,7 @@ fn leader_crash_pending_fast_path_entries_decided() {
 #[serial]
 fn rolling_leader_failures_cluster_survives() {
     test_begin("rolling_leader_failures_cluster_survives");
-    let cfg = dom_default_testcfg(None); // N=7
+    let cfg = dom_default_testcfg(None, None); // N=7
     let mut sys = TestGuard::new(
         TestSystem::with(cfg),
         "rolling_leader_failures_cluster_survives",
@@ -1620,7 +1621,7 @@ fn rolling_leader_failures_cluster_survives() {
 #[serial]
 fn all_coordinators_crash_slow_path_decides() {
     test_begin("all_coordinators_crash_slow_path_decides");
-    let cfg = dom_default_testcfg(None); // N=7
+    let cfg = dom_default_testcfg(None, None); // N=7
     let mut sys = TestGuard::new(
         TestSystem::with(cfg),
         "all_coordinators_crash_slow_path_decides",
@@ -1708,7 +1709,7 @@ fn all_coordinators_crash_slow_path_decides() {
 #[serial]
 fn coordinator_and_leader_crash_new_leader_reconciles() {
     test_begin("coordinator_and_leader_crash_new_leader_reconciles");
-    let cfg = dom_default_testcfg(None); // N=7
+    let cfg = dom_default_testcfg(None, None); // N=7
     let mut sys = TestGuard::new(
         TestSystem::with(cfg),
         "coordinator_and_leader_crash_new_leader_reconciles",
@@ -1825,7 +1826,7 @@ fn coordinator_and_leader_crash_new_leader_reconciles() {
 #[serial]
 fn partition_then_leader_crash_minority_rejoins() {
     test_begin("partition_then_leader_crash_minority_rejoins");
-    let cfg = dom_default_testcfg(None); // N=7
+    let cfg = dom_default_testcfg(None, Some(Duration::from_millis(10_000))); // N=7
     let mut sys = TestGuard::new(
         TestSystem::with(cfg),
         "partition_then_leader_crash_minority_rejoins",
@@ -1975,7 +1976,7 @@ fn partition_then_leader_crash_minority_rejoins() {
 #[serial]
 fn many_entries_multiple_coordinators() {
     test_begin("many_entries_multiple_coordinators");
-    let cfg = dom_default_testcfg(None); // 7 nodes, fast_quorum=6
+    let cfg = dom_default_testcfg(None, None); // 7 nodes, fast_quorum=6
     let sys = TestGuard::new(
         TestSystem::with(cfg),
         "many_entries_multiple_coordinators",
