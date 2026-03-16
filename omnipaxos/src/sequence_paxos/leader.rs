@@ -455,7 +455,7 @@ where
             self.leader_state
                 .set_accepted_idx(from, accepted.accepted_idx);
             if accepted.accepted_idx > self.internal_storage.get_decided_idx() {
-                match self.dom.handle_fast_accepted(accepted, from) {
+                match self.dom.handle_fast_accepted(accepted, from, self.pid) {
                     FastAcceptedOutcome::QuorumReached => {
                         #[cfg(feature = "logging")]
                         info!(
@@ -498,17 +498,18 @@ where
                         // proactive Decide is sent from handle_released_fast_entry_leader
                         // once the entry is processed.
                     }
-                    FastAcceptedOutcome::Pending => {
+                    FastAcceptedOutcome::Pending(has_leader_fast_accepted) => {
                         #[cfg(feature = "logging")]
                         info!(
                             self.logger,
                             "[FAST_ACCEPTED][QUORUM] coordinator={} request={} accepted_idx={} \
-                             pending={}/{}",
+                             pending={}/{} leader_fast_accepted={}",
                             accepted.coordinator_id,
                             accepted.request_id,
                             accepted.accepted_idx,
                             self.dom.fast_accepted_count(accepted.accepted_idx),
                             self.dom.fast_accepted_quorum_size(),
+                            has_leader_fast_accepted,
                         );
                     }
                 }
@@ -560,7 +561,10 @@ where
                 accepted_idx,
                 hash,
             };
-            match self.dom.handle_fast_accepted(fast_accepted, self.pid) {
+            match self
+                .dom
+                .handle_fast_accepted(fast_accepted, self.pid, self.pid)
+            {
                 FastAcceptedOutcome::QuorumReached => {
                     if accepted_idx > self.internal_storage.get_decided_idx() {
                         self.fast_decide(accepted_idx, hash);
@@ -597,7 +601,7 @@ where
                         self.send_decide(follower, accepted_idx, false, hash);
                     }
                 }
-                FastAcceptedOutcome::Pending => {}
+                FastAcceptedOutcome::Pending(_) => {}
             }
         }
     }

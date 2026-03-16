@@ -34,7 +34,7 @@ struct FastAcceptedQuorum {
 pub enum FastAcceptedOutcome {
     /// This acknowledgement matched the reference hash but the fast quorum
     /// threshold has not yet been reached.
-    Pending,
+    Pending(bool),
     /// The fast quorum threshold has been reached; the leader may now call
     /// `fast_decide`.
     QuorumReached,
@@ -238,6 +238,7 @@ where
         &mut self,
         accepted: FastAccepted,
         from: NodeId,
+        leader_pid: NodeId,
     ) -> FastAcceptedOutcome {
         let qd = self
             .fast_accepted_tracker
@@ -252,10 +253,15 @@ where
         }
 
         qd.replicas.insert(from);
+        let has_leader_fast_accepted = qd.replicas.contains(&leader_pid);
         if qd.replicas.len() >= self.fast_quorum_size {
-            FastAcceptedOutcome::QuorumReached
+            if has_leader_fast_accepted {
+                FastAcceptedOutcome::QuorumReached
+            } else {
+                FastAcceptedOutcome::Pending(has_leader_fast_accepted)
+            }
         } else {
-            FastAcceptedOutcome::Pending
+            FastAcceptedOutcome::Pending(has_leader_fast_accepted)
         }
     }
 
